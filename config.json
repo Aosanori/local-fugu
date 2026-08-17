@@ -94,12 +94,14 @@
     "proposerTimeoutMs": 600000,
     "minProposers": 2,
     "reasoningHeadroom": 2048,
-    "timeoutPerCharMs": 2
+    "timeoutPerCharMs": 2,
+    "balance": "sticky"
   },
   "lmsContextLength": 65536,
   "debate": {
-    "enabled": true,
-    "rounds": 1,
-    "maxPeerChars": 2000
+    "mode": "auto",
+    "maxRounds": 2,
+    "maxPeerChars": 2000,
+    "convergence": 0.85
   }
 }

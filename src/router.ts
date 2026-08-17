@@ -1,4 +1,4 @@
-import { config } from './config.ts'
+import { config, member, type PoolMember, proposers } from './config.ts'
 import type { ChatRequest } from './upstream.ts'
 
 export type Mode = 'auto' | 'moa' | 'fast'
@@ -44,4 +44,43 @@ export function route(req: ChatRequest, mode: Mode): Route {
   }
 
   return { kind: 'fanout', reason: 'deliberate turn' }
+}
+
+const fnv1a = (str: string): number => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h
+}
+
+/**
+ * Which member owns this conversation.
+ *
+ * Routing each turn to whoever seems free would invalidate the prefix cache on
+ * every switch, and a long conversation re-prefilled from scratch costs
+ * minutes. So the spread happens across conversations instead: a conversation's
+ * identity (system prompt + first user message) hashes to a seat, parallel
+ * sessions land on different members, and each conversation stays cache-warm
+ * on its owner for its whole life.
+ *
+ * The aggregator is the same member on purpose — synthesis carries the whole
+ * conversation too, and only the owner has it prefilled.
+ */
+export function seatFor(req: ChatRequest): { primary: PoolMember; aggregator: PoolMember } {
+  const pool = proposers()
+  if (config.router.balance === 'off' || pool.length === 0) {
+    return { primary: member(config.primary), aggregator: member(config.aggregator) }
+  }
+
+  const system = req.messages.find((m) => m.role === 'system')
+  const firstUser = req.messages.find((m) => m.role === 'user')
+  const key =
+    (typeof system?.content === 'string' ? system.content : '') +
+    '\u0000' +
+    (typeof firstUser?.content === 'string' ? firstUser.content : '')
+
+  const owner = pool[fnv1a(key) % pool.length]
+  return { primary: owner, aggregator: owner }
 }

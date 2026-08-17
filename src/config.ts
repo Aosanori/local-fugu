@@ -26,7 +26,18 @@ export type Config = {
   aggregator: string
   /** context length used when the gateway loads a model into LM Studio */
   lmsContextLength?: number
-  debate?: { enabled: boolean; rounds: number; maxPeerChars: number }
+  debate?: {
+    /** auto: the conversation's owner decides per turn; always / off */
+    mode?: 'auto' | 'always' | 'off'
+    /** legacy switch, honoured when mode is absent */
+    enabled?: boolean
+    maxRounds?: number
+    /** legacy name for maxRounds */
+    rounds?: number
+    maxPeerChars: number
+    /** stop early once every debater's revision is at least this similar (0-1) */
+    convergence?: number
+  }
   router: {
     trivialChars: number
     fanoutOnContinuation: boolean
@@ -37,6 +48,8 @@ export type Config = {
     proposerTimeoutMs: number
     /** extra timeout per prompt character, so long contexts get longer ceilings */
     timeoutPerCharMs?: number
+    /** 'sticky' spreads conversations across the pool; 'off' pins config.primary */
+    balance?: 'sticky' | 'off'
     minProposers: number
   }
 }

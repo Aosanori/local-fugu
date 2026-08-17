@@ -126,9 +126,22 @@ curl -s localhost:4141/api/pool -X POST -H 'content-type: application/json' \
 
 The proposal round is blind on purpose — independent errors are what make
 selection worth anything. But on a turn with no score to appeal to, blindness
-is all downside, so text turns get a round of cross-examination: every model
-reads the others' answers and writes its own again. Only then does the
-aggregator synthesize.
+is all downside, so text turns can get cross-examination: every model reads the
+others' answers and writes its own again. Only then does the aggregator
+synthesize.
+
+**Whether that happens is decided per turn, by a model, not by a rule.** In
+`mode: "auto"` the conversation's owner reads the drafts and votes on whether a
+debate would change anything — the hand-rolled version of Fugu's query-adaptive
+routing. Observed live: a factual question skipped with "Models agree on core
+facts", and a design question where all three independently reached the same
+conclusion also skipped with "All three agree, no disagreement" — it judges the
+actual disagreement in front of it, not the shape of the question.
+
+When it does debate, rounds repeat until the panel stops revising: after each
+round the most-changed debater's bigram similarity to its previous answer is
+compared against `convergence`, and the loop stops early once even they held
+their position. `maxRounds` caps it either way.
 
 The console draws a bar in the gap between each pair that is actually talking.
 That is not always the whole pool: a proposer that failed, timed out, or
@@ -136,12 +149,14 @@ returned nothing never enters the round, and with two members it is a
 two-way link.
 
 It costs a full extra fan-out per round — a design question measured 295 s for
-propose + one debate round on this machine, against ~110 s without. Turn it off
-or raise `rounds` in `config.json`:
+propose + one debate round on this machine, against ~110 s without, which is
+exactly why the triage exists. Configure in `config.json`:
 
 ```json
-"debate": { "enabled": true, "rounds": 1, "maxPeerChars": 2000 }
+"debate": { "mode": "auto", "maxRounds": 2, "maxPeerChars": 2000, "convergence": 0.85 }
 ```
+
+`mode` is `auto` (owner decides), `always`, or `off`.
 
 Tool turns never debate. When a verifier can answer the question, an argument
 between models is a worse instrument than running the tests.
@@ -328,3 +343,18 @@ in order of payoff:
 Neither helps on turns with no automatic score — design discussion, requirement
 shaping. Those stay MoA-with-a-judge, and that is the honest ceiling of this
 approach.
+
+## Who does the work
+
+One member used to be primary, aggregator and judge at once, so every
+passthrough, every tool-loop continuation and every synthesis landed on the
+same model while the rest of the pool idled between fan-outs.
+
+Now each **conversation** is assigned an owner — a hash of its identity (system
+prompt + first user message) picks a seat — and that owner handles the
+conversation's direct calls, its synthesis and its judging for its whole life.
+Turns are deliberately NOT balanced individually: moving a conversation between
+models invalidates the prefix cache, and re-prefilling a long conversation from
+scratch costs minutes. The spread happens across conversations — parallel
+sessions land on different members. `router.balance: "off"` restores the pinned
+`primary`/`aggregator` from the config.

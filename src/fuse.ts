@@ -1,4 +1,5 @@
 import { emit } from './bus.ts'
+import { seatFor } from './router.ts'
 import { config, member, type PoolMember, proposers } from './config.ts'
 import { complete, type ChatRequest, type Message, type ToolCall } from './upstream.ts'
 import {
@@ -136,7 +137,7 @@ export async function judge(
 
   try {
     const { message } = await complete(
-      member(config.aggregator),
+      seatFor(req).aggregator,
       {
         model: '',
         messages: [
@@ -166,6 +167,80 @@ export async function judge(
   }
 
   return candidates[0]
+}
+
+/**
+ * The conversation's owner reads the drafts and decides whether a debate would
+ * change anything.
+ *
+ * This is the hand-rolled version of Fugu's query-adaptive routing: instead of
+ * a rule ("text turn → always debate"), the model that owns the conversation
+ * looks at what the panel actually produced. Drafts that already agree, or a
+ * question with a checkable answer, are not worth another 90-300 s round.
+ */
+export async function debateWorthIt(
+  req: ChatRequest,
+  drafts: Proposal[],
+  owner: PoolMember,
+  signal?: AbortSignal,
+): Promise<{ debate: boolean; why: string }> {
+  const lastUser = [...req.messages].reverse().find((m) => m.role === 'user')
+  const summary = drafts
+    .map((d) => `<answer model="${d.member.label ?? d.member.id}">\n${(d.message.content ?? '').slice(0, 900)}\n</answer>`)
+    .join('\n')
+
+  try {
+    const { message } = await complete(
+      owner,
+      {
+        model: '',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You triage answers from a panel of models. Decide if a debate round (each model reads the others and revises) would materially improve the final answer. Debate pays off when the answers disagree on substance, or the question is a judgment call with real trade-offs. It is waste when the answers already agree, or the question is factual, mechanical, or easily checked. Reply with only JSON: {"debate": true|false, "why": "<ten words max>"}',
+          },
+          {
+            role: 'user',
+            content: `Question:\n${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 2000) : '(continuation)'}\n\nPanel answers:\n${summary}`,
+          },
+        ],
+        max_tokens: config.router.reasoningHeadroom + 64,
+        temperature: 0,
+      },
+      { timeoutMs: turnTimeoutMs(req), signal },
+    )
+
+    const text = String(message.content ?? '')
+    const parsed = /"debate"\s*:\s*(true|false)/.exec(text)
+    if (parsed) {
+      const why = /"why"\s*:\s*"([^"]{0,120})"/.exec(text)?.[1] ?? ''
+      return { debate: parsed[1] === 'true', why }
+    }
+  } catch (e) {
+    console.warn(`[magi] debate triage failed: ${(e as Error).message}`)
+  }
+
+  // No verdict — skip. Failing toward the cheap path keeps an overloaded pool
+  // from paying for a debate on top of whatever just went wrong.
+  return { debate: false, why: 'triage failed, skipped' }
+}
+
+/** Character-bigram overlap — language-neutral, works for Japanese as well. */
+const bigrams = (s: string): Set<string> => {
+  const t = s.replace(/\s+/g, ' ').trim().toLowerCase()
+  const out = new Set<string>()
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2))
+  return out
+}
+
+export function similarity(a: string, b: string): number {
+  const A = bigrams(a)
+  const B = bigrams(b)
+  if (A.size === 0 && B.size === 0) return 1
+  let shared = 0
+  for (const g of A) if (B.has(g)) shared++
+  return shared / (A.size + B.size - shared)
 }
 
 /**

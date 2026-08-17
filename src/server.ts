@@ -3,8 +3,18 @@ import pkg from '../package.json'
 import { emit, newTurn, replay, subscribe } from './bus.ts'
 import { catalog, load, unload } from './catalog.ts'
 import { config, member, probe, proposers, setPool } from './config.ts'
-import { consensus, debate, judge, propose, synthesisRequest, turnTimeoutMs, verifiedSelect } from './fuse.ts'
-import { modeOf, route } from './router.ts'
+import {
+  consensus,
+  debate,
+  debateWorthIt,
+  judge,
+  propose,
+  similarity,
+  synthesisRequest,
+  turnTimeoutMs,
+  verifiedSelect,
+} from './fuse.ts'
+import { modeOf, route, seatFor } from './router.ts'
 import { jsonFromMessage, sseKeepAlive, type Turn } from './sse.ts'
 import { complete, stream, type ChatRequest, type Message } from './upstream.ts'
 import { verifyConfig } from './verify.ts'
@@ -58,6 +68,9 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   // Strip our virtual id; each upstream call sets its own real model.
   const base: ChatRequest = { ...body, model: '' }
 
+  // The member this conversation is stuck to — cache-warm for every direct call.
+  const seat = seatFor(base)
+
   // propose() reports its own failures per seat; these are for the calls made
   // directly — primary and aggregator — which used to fail invisibly, leaving
   // the console deliberating forever.
@@ -93,13 +106,13 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   }
 
   if (decision.kind === 'passthrough') {
-    const m = member(config.primary)
+    const m = seat.primary
     log({ route: 'passthrough', why: `"${decision.reason}"`, model: m.id })
     return single(m, base, 'passthrough')
   }
 
   if (decision.kind === 'speculative') {
-    const m = member(config.primary)
+    const m = seat.primary
     emit({ type: 'node', turn, id: m.id, state: 'thinking' })
     let first
     try {
@@ -178,7 +191,7 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   const drafts = await propose(base, { signal: req.signal, turn })
 
   if (drafts.length < config.router.minProposers) {
-    const m = member(config.primary)
+    const m = seat.primary
     log({ route: 'fanout', result: 'degraded', proposers: drafts.length, fallback: m.id })
     return single(m, base, 'degraded')
   }
@@ -230,17 +243,41 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   }
 
   // Text turn: nothing here can be scored, so this is where debate earns its
-  // keep — the models read each other before anything is synthesized.
+  // keep — but only when it would change something. In auto mode the
+  // conversation's owner reads the drafts first and votes on whether another
+  // 90-300 s round is worth paying for; rounds then repeat until the panel
+  // stops revising or maxRounds is hit.
   let finalDrafts = drafts
   const dcfg = config.debate
-  if (dcfg?.enabled && drafts.length >= 2) {
-    for (let round = 1; round <= dcfg.rounds; round++) {
-      finalDrafts = await debate(base, finalDrafts, { signal: req.signal, turn, round })
-      log({ route: 'fanout', debate: `round ${round}`, participants: finalDrafts.length })
+  const dmode = dcfg?.mode ?? (dcfg?.enabled ? 'always' : 'off')
+  if (dmode !== 'off' && drafts.length >= 2) {
+    let go = true
+    let why = 'mode=always'
+    if (dmode === 'auto') {
+      const verdict = await debateWorthIt(base, drafts, seat.aggregator, req.signal)
+      go = verdict.debate
+      why = verdict.why
+    }
+    log({ route: 'fanout', debate: go ? 'go' : 'skipped', why: `"${why}"` })
+
+    if (go) {
+      const maxRounds = dcfg?.maxRounds ?? dcfg?.rounds ?? 1
+      const threshold = dcfg?.convergence ?? 0.85
+      for (let round = 1; round <= maxRounds; round++) {
+        const before = new Map(finalDrafts.map((d) => [d.member.id, d.message.content ?? '']))
+        finalDrafts = await debate(base, finalDrafts, { signal: req.signal, turn, round })
+        // The most-changed debater decides: once even they kept their answer,
+        // another round has nothing left to move.
+        const stability = Math.min(
+          ...finalDrafts.map((d) => similarity(before.get(d.member.id) ?? '', d.message.content ?? '')),
+        )
+        log({ route: 'fanout', debate: `round ${round}`, stability: stability.toFixed(2) })
+        if (stability >= threshold) break
+      }
     }
   }
 
-  const agg = member(config.aggregator)
+  const agg = seat.aggregator
   const synth = synthesisRequest(base, finalDrafts)
   log({
     route: 'fanout',
