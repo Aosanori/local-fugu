@@ -307,7 +307,11 @@ const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers
 
 const server = Bun.serve({
   port: config.listen,
-  idleTimeout: 255,
+  // Never tear a connection down for being quiet — a fan-out with a debate
+  // round legitimately sends nothing for minutes. The SSE heartbeats stay
+  // anyway: they are what lets a console notice a dead link, and what keeps
+  // client-side read timeouts from giving up on us.
+  idleTimeout: 0,
   async fetch(req) {
     const { pathname } = new URL(req.url)
 
