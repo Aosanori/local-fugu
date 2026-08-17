@@ -416,7 +416,9 @@ function render() {
     !!slots[a] && !!slots[b] && talking.has(slots[a]!.id) && talking.has(slots[b]!.id)
 
   // Block-glyph MAGI banner, three rows tall, centred in the notch. Debate
-  // links to the top seat attach to its middle row.
+  // links to the top seat attach to its middle row. The spacer keeps it off
+  // the top seat's chamfer — without it the banner reads as hanging high.
+  out.push('')
   const BANNER = [
     '█▀▄▀█  ▄▀▀▄  ▄▀▀▀▄  ▀█▀',
     '█ ▀ █  █▄▄█  █  ▄▄   █',
