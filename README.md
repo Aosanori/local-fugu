@@ -13,8 +13,8 @@ Here the routing policy is a hand-written table in `src/router.ts`.
 brew install aosanori/tap/magi
 ```
 
-One command with two halves: `magi serve` is the gateway, `magi` on its own
-opens the console. The pool config lands in `$(brew --prefix)/etc/magi/config.json`
+One command: `magi` starts the gateway and opens the console over it, `magi
+serve` runs the gateway alone. The pool config lands in `$(brew --prefix)/etc/magi/config.json`
 and survives upgrades.
 
 ## Running
@@ -49,6 +49,12 @@ In the terminal:
 ```bash
 magi
 ```
+
+`magi` on its own is the whole thing: it starts the gateway unless one is
+already answering, then attaches the console to it. The gateway's own log lines
+are folded into the console's feed — printing them to stdout would land in the
+middle of a redraw. Use `magi serve` for a headless gateway and `magi console`
+to attach to one without starting anything.
 
 ```
  FRONT  OPENAI-COMPATIBLE ENDPOINT http://localhost:4141/v1

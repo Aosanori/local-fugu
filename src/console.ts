@@ -342,5 +342,24 @@ const bye = () => {
 process.on('SIGINT', bye)
 process.on('SIGTERM', bye)
 
+/**
+ * Somewhere for a co-hosted gateway to put its output. Writing to stdout would
+ * land in the middle of a full-screen redraw and shred the frame, so its log
+ * lines are folded into the console's own feed instead.
+ */
+export function pushLog(line: string): void {
+  state.log.unshift(line.replace(/\s+/g, ' ').trim())
+  state.log = state.log.slice(0, 20)
+  render()
+}
+
+/** Put the terminal back the way it was found. */
+export function restore(): void {
+  clearInterval(ticker)
+  process.stdout.write('\x1b[?25h\n')
+}
+
 render()
-await follow()
+// Deliberately not awaited: `magi` imports this and then starts the gateway in
+// the same process, so the module has to finish loading.
+void follow()
