@@ -189,8 +189,203 @@ function placed(): (Node | undefined)[] {
   return slots
 }
 
+// ---- pool picker -----------------------------------------------------------
+
+type PickerRow = {
+  model: string
+  upstream: string
+  state: 'loaded' | 'not-loaded'
+  maxContext?: number
+  selected: boolean
+  context: number
+}
+
+const picker = {
+  open: false,
+  busy: false,
+  rows: [] as PickerRow[],
+  cursor: 0,
+  primary: 0,
+  aggregator: 0,
+  msg: '',
+}
+
+const CONTEXT_STEPS = [8192, 16384, 32768, 65536, 131072, 262144]
+
+async function openPicker(): Promise<void> {
+  picker.open = true
+  picker.busy = true
+  picker.msg = 'loading…'
+  render()
+  try {
+    const res = await fetch(`${BASE}/api/models`, { timeout: false } as never)
+    const data = (await res.json()) as {
+      models: {
+        model: string
+        upstream: string
+        state: 'loaded' | 'not-loaded'
+        maxContext?: number
+        loadedContext?: number
+        inPool: boolean
+      }[]
+      pool: { id: string; model: string }[]
+      primary: string
+      aggregator: string
+      contextLength: number
+    }
+    picker.rows = data.models.map((m) => ({
+      model: m.model,
+      upstream: m.upstream,
+      state: m.state,
+      maxContext: m.maxContext,
+      selected: m.inPool,
+      context: m.loadedContext ?? data.contextLength,
+    }))
+    const modelOf = (id: string) => data.pool.find((p) => p.id === id)?.model
+    picker.primary = Math.max(0, picker.rows.findIndex((r) => r.model === modelOf(data.primary)))
+    picker.aggregator = Math.max(0, picker.rows.findIndex((r) => r.model === modelOf(data.aggregator)))
+    picker.cursor = 0
+    picker.msg = ''
+  } catch (e) {
+    picker.msg = `failed: ${(e as Error).message}`
+  }
+  picker.busy = false
+  render()
+}
+
+async function applyPicker(): Promise<void> {
+  const members = picker.rows
+    .filter((r) => r.selected)
+    .map((r) => ({ upstream: r.upstream, model: r.model, contextLength: r.context }))
+  if (members.length === 0) {
+    picker.msg = 'select at least one model'
+    return render()
+  }
+  picker.busy = true
+  picker.msg = 'applying… models are loaded or reloaded as needed, this can take a minute'
+  render()
+  try {
+    const res = await fetch(`${BASE}/api/pool`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        members,
+        primary: picker.rows[picker.primary]?.model,
+        aggregator: picker.rows[picker.aggregator]?.model,
+      }),
+      timeout: false,
+    } as never)
+    const body = (await res.json()) as { ok: boolean; error?: string; warnings?: string[] }
+    if (!body.ok) picker.msg = body.error ?? 'failed'
+    else if (body.warnings?.length) picker.msg = body.warnings.join(' / ')
+    else {
+      picker.open = false
+      picker.msg = ''
+    }
+  } catch (e) {
+    picker.msg = `failed: ${(e as Error).message}`
+  }
+  picker.busy = false
+  render()
+}
+
+function pickerKey(key: string): void {
+  if (picker.busy) return
+  const row = picker.rows[picker.cursor]
+
+  if (key === '\x1b' || key === 'q') {
+    picker.open = false
+  } else if (key === '\x1b[A' || key === 'k') {
+    picker.cursor = Math.max(0, picker.cursor - 1)
+  } else if (key === '\x1b[B' || key === 'j') {
+    picker.cursor = Math.min(picker.rows.length - 1, picker.cursor + 1)
+  } else if (key === ' ' && row) {
+    row.selected = !row.selected
+  } else if (key === 'p' && row) {
+    picker.primary = picker.cursor
+    row.selected = true
+  } else if (key === 'a' && row) {
+    picker.aggregator = picker.cursor
+    row.selected = true
+  } else if (key === 'c' && row) {
+    const steps = CONTEXT_STEPS.filter((v) => !row.maxContext || v <= row.maxContext)
+    const at = steps.indexOf(row.context)
+    row.context = steps[(at + 1) % steps.length] ?? row.context
+  } else if (key === '\r') {
+    void applyPicker()
+    return
+  }
+  render()
+}
+
+function renderPicker(cols: number): string[] {
+  const out: string[] = []
+  out.push(ORANGE + BOLD + '構成選択' + RESET)
+  out.push(DIMTEXT + '↑↓ 移動 · space 選択 · p PRIMARY · a AGG · c コンテキスト · enter 適用 · esc 閉じる' + RESET)
+  out.push('')
+
+  picker.rows.forEach((r, i) => {
+    const here = i === picker.cursor
+    const mark = r.selected ? '[x]' : '[ ]'
+    const badge = r.state === 'loaded' ? TEAL + 'LOADED ' + RESET : DIMTEXT + 'ON DISK' + RESET
+    const roles =
+      (i === picker.primary ? ' PRIMARY' : '') + (i === picker.aggregator ? ' AGG' : '')
+    const line = `${here ? ORANGE + '>' : ' '} ${mark} ${pad(r.model, 34)} ${Math.round(r.context / 1024)}k`
+    out.push(`${line}${RESET}  ${badge}${ORANGE}${roles}${RESET}`)
+  })
+
+  out.push('')
+  out.push(GREY + clip(picker.msg, cols) + RESET)
+  return out
+}
+
+// ---- keyboard --------------------------------------------------------------
+
+function handleKey(key: string): void {
+  if (key === '\x03') return bye() // raw mode swallows Ctrl+C
+
+  if (picker.open) return pickerKey(key)
+  if (key === 'p' || key === 'P') void openPicker()
+  else if (key === 'q' || key === 'Q') bye()
+}
+
+/** A chunk can carry several keys; escape sequences stay whole. */
+function feedKeys(chunk: string): void {
+  let i = 0
+  while (i < chunk.length) {
+    if (chunk[i] === '\x1b' && chunk[i + 1] === '[') {
+      handleKey(chunk.slice(i, i + 3))
+      i += 3
+    } else {
+      handleKey(chunk[i])
+      i += 1
+    }
+  }
+}
+
+// node-compat stdin events do not fire for pipes/fifos under Bun; the native
+// stream delivers for ttys and pipes alike.
+async function readKeys(): Promise<void> {
+  const decoder = new TextDecoder()
+  for await (const chunk of Bun.stdin.stream()) {
+    feedKeys(decoder.decode(chunk))
+  }
+}
+
+if (process.stdin.isTTY || process.env.MAGI_FORCE_KEYS) {
+  if (process.stdin.isTTY) process.stdin.setRawMode(true)
+  void readKeys()
+}
+
 function render() {
   const cols = Math.max(64, Math.min(process.stdout.columns ?? 100, 120))
+
+  if (picker.open) {
+    const body = renderPicker(cols)
+    process.stdout.write('\x1b[H' + body.map((l) => l + '\x1b[K').join('\n') + '\x1b[J')
+    return
+  }
+
   const out: string[] = []
   const rule = (label: string) => ORANGE + BOLD + label + RESET + TEAL + '─'.repeat(Math.max(0, Math.floor(cols / 2) - width(label) - 2)) + RESET
 
@@ -220,15 +415,24 @@ function render() {
   const linked = (a: number, b: number) =>
     !!slots[a] && !!slots[b] && talking.has(slots[a]!.id) && talking.has(slots[b]!.id)
 
-  // One spacer row keeps the label vertically centred in the notch instead of
-  // hugging the top panel's chamfer.
-  out.push('')
-  const hub = Array.from({ length: cols }, () => ' ')
-  const put = (text: string, at: number) => [...text].forEach((ch, i) => (hub[at + i] = ch))
-  put('M A G I', Math.floor((cols - 7) / 2))
-  if (linked(0, 1)) put('╱', Math.floor(cols / 2) - 13)
-  if (linked(0, 2)) put('╲', Math.floor(cols / 2) + 13)
-  out.push(ORANGE + BOLD + hub.join('').trimEnd() + RESET)
+  // Block-glyph MAGI banner, three rows tall, centred in the notch. Debate
+  // links to the top seat attach to its middle row.
+  const BANNER = [
+    '█▀▄▀█  ▄▀▀▄  ▄▀▀▀▄  ▀█▀',
+    '█ ▀ █  █▄▄█  █  ▄▄   █',
+    '▀   ▀  ▀  ▀   ▀▀▀   ▀▀▀',
+  ]
+  const bannerW = Math.max(...BANNER.map((b) => b.length))
+  BANNER.forEach((row, i) => {
+    const hub = Array.from({ length: cols }, () => ' ')
+    const put = (text: string, at: number) => [...text].forEach((ch, j) => (hub[at + j] = ch))
+    put(row, Math.floor((cols - bannerW) / 2))
+    if (i === 1) {
+      if (linked(0, 1)) put('╱', Math.floor((cols - bannerW) / 2) - 3)
+      if (linked(0, 2)) put('╲', Math.floor((cols + bannerW) / 2) + 2)
+    }
+    out.push(ORANGE + BOLD + hub.join('').trimEnd() + RESET)
+  })
 
   const left = panel(slots[1], sideW, 'left')
   const right = panel(slots[2], sideW, 'right')
@@ -245,6 +449,8 @@ function render() {
   out.push(`${DIMTEXT}DECISION ${RESET}${state.decision}   ${DIMTEXT}BASELINE ${RESET}${state.baseline}   ${DIMTEXT}BEST ${RESET}${state.best}   ${DIMTEXT}ELAPSED ${RESET}${state.elapsed}`)
   out.push(TEAL + '─'.repeat(cols) + RESET)
   for (const line of state.log.slice(0, 6)) out.push(DIMTEXT + clip(line, cols) + RESET)
+  out.push('')
+  out.push(DIMTEXT + 'P 構成選択 · Q 終了' + RESET)
 
   process.stdout.write('\x1b[H' + out.map((l) => l + '\x1b[K').join('\n') + '\x1b[J')
 }
@@ -375,6 +581,7 @@ export function pushLog(line: string): void {
 /** Put the terminal back the way it was found. */
 export function restore(): void {
   clearInterval(ticker)
+  if (process.stdin.isTTY) process.stdin.setRawMode(false)
   process.stdout.write('\x1b[?1049l\x1b[?25h')
 }
 

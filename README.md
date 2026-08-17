@@ -112,7 +112,11 @@ explicit context and no TTL, for the reasons in Gotchas). The pool is then
 rebuilt and written back to `config.json`; ids and MAGI seats are derived from
 the model names, so nothing has to be named by hand.
 
-The same thing from a terminal:
+The terminal console has the same picker: press **P**, then ↑↓ to move,
+space to include a model, **p**/**a** to set primary/aggregator, **c** to cycle
+that model's context length, enter to apply, esc to close. **Q** quits.
+
+The same thing from a script:
 
 ```bash
 curl -s localhost:4141/api/models | jq '.models[] | {model, state, inPool}'
