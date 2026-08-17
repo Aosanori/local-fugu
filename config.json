@@ -22,7 +22,8 @@
         "primary",
         "aggregator"
       ],
-      "label": "MELCHIOR·1"
+      "label": "MELCHIOR·1",
+      "contextLength": 65536
     },
     {
       "id": "gemma-4-31b",
@@ -31,7 +32,8 @@
       "roles": [
         "proposer"
       ],
-      "label": "BALTHASAR·2"
+      "label": "BALTHASAR·2",
+      "contextLength": 65536
     },
     {
       "id": "muse-glimmer",
@@ -40,7 +42,8 @@
       "roles": [
         "proposer"
       ],
-      "label": "CASPER·3"
+      "label": "CASPER·3",
+      "contextLength": 32768
     }
   ],
   "primary": "qwen3.8-27b",
@@ -88,7 +91,7 @@
     "fanoutOnContinuation": false,
     "speculativeEdit": true,
     "proposerMaxTokens": 2048,
-    "proposerTimeoutMs": 180000,
+    "proposerTimeoutMs": 600000,
     "minProposers": 2,
     "reasoningHeadroom": 2048
   },

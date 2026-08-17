@@ -40,7 +40,16 @@ const SKIN: Record<NodeState, { bg: Rgb; fg: Rgb; verdict: string }> = {
 
 const paint = (c: Rgb, bg = false) => rgb(c[0], c[1], c[2], bg)
 
-type Node = { id: string; label: string; model: string; state: NodeState; note: string }
+type Node = {
+  id: string
+  label: string
+  model: string
+  state: NodeState
+  note: string
+  /** context the model was loaded with, and what it just used */
+  context?: number
+  tokens?: number
+}
 
 const state = {
   nodes: [] as Node[],
@@ -108,6 +117,7 @@ function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right
     { text: node?.model ?? '' },
     { text: skin.verdict, bold: true },
     { text: node?.note ?? '' },
+    { text: usage(node) },
   ]
   const rows =
     shape === 'top' ? [{ text: '' }, ...content, { text: '' }] : [{ text: '' }, { text: '' }, ...content]
@@ -116,6 +126,7 @@ function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right
   const insets: [number, number][] =
     shape === 'top'
       ? [
+          [0, 0],
           [0, 0],
           [0, 0],
           [0, 0],
@@ -131,10 +142,12 @@ function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right
             [0, 0],
             [0, 0],
             [0, 0],
+            [0, 0],
           ]
         : [
             [step * 2, 0],
             [step, 0],
+            [0, 0],
             [0, 0],
             [0, 0],
             [0, 0],
@@ -146,6 +159,16 @@ function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right
     const body = bg + fg + (row.bold ? BOLD : '') + center(row.text, w - l - r) + RESET
     return ' '.repeat(l) + body + ' '.repeat(r)
   })
+}
+
+const short = (n: number) => (n >= 1024 ? `${+(n / 1024).toFixed(1)}k` : String(n))
+
+const usage = (node?: Node): string => {
+  if (!node?.tokens) return ''
+  if (!node.context) return `${short(node.tokens)} tok`
+  const pct = Math.round((node.tokens / node.context) * 100)
+  const filled = Math.min(10, Math.round((node.tokens / node.context) * 10))
+  return `${short(node.tokens)}/${short(node.context)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${pct}%`
 }
 
 const PREFERRED: Record<string, number> = { BALTHASAR: 0, CASPER: 1, MELCHIOR: 2 }
@@ -241,6 +264,7 @@ function handle(e: any) {
     for (const n of state.nodes) {
       n.state = 'idle'
       n.note = ''
+      n.tokens = undefined
     }
     state.log.unshift(`${e.turn} ${e.route} — ${e.reason}`)
   } else if (e.type === 'node') {
@@ -248,6 +272,7 @@ function handle(e: any) {
     if (n) {
       n.state = e.state
       if (e.note) n.note = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
+      if (e.tokens) n.tokens = e.tokens
     }
   } else if (e.type === 'debate') {
     state.debating = e.participants

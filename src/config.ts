@@ -14,6 +14,8 @@ export type PoolMember = {
   enabled?: boolean
   /** filled in at boot by probe() */
   available?: boolean
+  /** context the runtime actually loaded this model with, for usage display */
+  contextLength?: number
 }
 
 export type Config = {
@@ -52,7 +54,7 @@ const slug = (model: string) =>
  * seats are derived here so a caller only has to name models.
  */
 export async function setPool(
-  selection: { upstream: string; model: string }[],
+  selection: { upstream: string; model: string; contextLength?: number }[],
   primaryModel?: string,
   aggregatorModel?: string,
 ): Promise<void> {
@@ -69,6 +71,7 @@ export async function setPool(
       model: s.model,
       roles: ['proposer'],
       label: SEATS[i] ?? `NODE·${i + 1}`,
+      ...(s.contextLength ? { contextLength: s.contextLength } : {}),
     }
   })
 
@@ -120,9 +123,31 @@ export const proposers = (): PoolMember[] =>
  */
 export async function probe(): Promise<void> {
   const loaded = new Map<string, Set<string>>()
+  const contexts = new Map<string, number>()
 
   for (const [name, u] of Object.entries(config.upstreams)) {
     configure(name, u.maxConcurrency ?? 1)
+
+    // LM Studio also reports the context each model was loaded with, which is
+    // what a usage read-out has to be measured against.
+    try {
+      const res = await fetch(u.baseURL.replace(/\/v1\/?$/, '/api/v0/models'), {
+        headers: u.apiKey ? { Authorization: `Bearer ${u.apiKey}` } : {},
+        signal: AbortSignal.timeout(4000),
+      })
+      if (res.ok) {
+        const body = (await res.json()) as {
+          data?: { id: string; loaded_context_length?: number; max_context_length?: number }[]
+        }
+        for (const m of body.data ?? []) {
+          const ctx = m.loaded_context_length ?? m.max_context_length
+          if (ctx) contexts.set(`${name}/${m.id}`, ctx)
+        }
+      }
+    } catch {
+      // upstream has no native catalog; usage is then shown without a ceiling
+    }
+
     try {
       const res = await fetch(`${u.baseURL}/models`, {
         headers: u.apiKey ? { Authorization: `Bearer ${u.apiKey}` } : {},
@@ -142,6 +167,7 @@ export async function probe(): Promise<void> {
       continue
     }
     m.available = loaded.get(m.upstream)?.has(m.model) ?? false
+    m.contextLength = contexts.get(`${m.upstream}/${m.model}`)
     if (!m.available && !m.optional) {
       throw new Error(`required pool member ${m.id} (${m.model}) is not loaded on ${m.upstream}`)
     }

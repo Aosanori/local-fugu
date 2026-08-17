@@ -15,6 +15,8 @@ export type Proposal = {
   message: Message
   finish_reason: string
   ms: number
+  /** prompt + completion tokens the upstream reported */
+  tokens?: number
 }
 
 const DRAFT_LIMIT = 4000
@@ -31,7 +33,7 @@ export async function propose(
     pool.map(async (m): Promise<Proposal> => {
       const started = Date.now()
       emit({ type: 'node', turn, id: m.id, state: 'thinking' })
-      const { message, finish_reason } = await complete(
+      const { message, finish_reason, tokens } = await complete(
         m,
         // The client's cap governs the answer it receives, not the internal
         // drafts — a reasoning model handed max_tokens=400 spends all of it
@@ -49,9 +51,10 @@ export async function propose(
         id: m.id,
         state: 'answered',
         ms,
+        tokens,
         note: message.tool_calls?.[0]?.function.name ?? `${(message.content ?? '').length} chars`,
       })
-      return { member: m, message, finish_reason, ms }
+      return { member: m, message, finish_reason, ms, tokens }
     }),
   )
 
@@ -179,7 +182,7 @@ export async function debate(
         .map((p) => `<peer id="${p.member.label ?? p.member.id}">\n${(p.message.content ?? '').slice(0, limit)}\n</peer>`)
         .join('\n\n')
 
-      const { message, finish_reason } = await complete(
+      const { message, finish_reason, tokens } = await complete(
         own.member,
         {
           ...req,
@@ -202,9 +205,10 @@ export async function debate(
         id: own.member.id,
         state: 'answered',
         ms,
+        tokens,
         note: `round ${round} · ${(message.content ?? '').length} chars`,
       })
-      return { member: own.member, message, finish_reason, ms }
+      return { member: own.member, message, finish_reason, ms, tokens }
     }),
   )
 

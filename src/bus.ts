@@ -1,8 +1,17 @@
 /** Live event feed for the MAGI console. Fire-and-forget: no subscriber, no cost. */
 export type Event =
-  | { type: 'hello'; nodes: { id: string; label: string; model: string }[] }
+  | { type: 'hello'; nodes: { id: string; label: string; model: string; context?: number }[] }
   | { type: 'turn'; turn: string; route: string; reason: string; prompt: string; tools: number }
-  | { type: 'node'; turn: string; id: string; state: NodeState; note?: string; ms?: number }
+  | {
+      type: 'node'
+      turn: string
+      id: string
+      state: NodeState
+      note?: string
+      ms?: number
+      /** tokens the upstream reported for this call */
+      tokens?: number
+    }
   | {
       type: 'verify'
       turn: string

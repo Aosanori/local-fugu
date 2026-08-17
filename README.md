@@ -75,6 +75,10 @@ DECISION synthesize → qwen   BASELINE -   BEST -   ELAPSED 202.2s
 
 Or in a browser at `http://localhost:4141/`.
 
+Each seat also reports what it consumed on that call against the context it was
+loaded with — `997/32k ░░░░░░░░░░ 3%` — so a member running out of room is
+visible before it starts truncating.
+
 Both read `GET /events` (server-sent events), which replays the last 40 events
 on connect — attach mid-task and the current turn is already on screen. The
 console is read-only and holds no state the gateway needs; closing it costs
@@ -94,10 +98,13 @@ nothing.
 
 The **POOL** button lists everything LM Studio holds — resident or merely
 downloaded — and lets you pick the members, the primary and the aggregator.
-Applying loads anything that is not resident (`lms load` with an explicit
-context and no TTL, for the reasons in Gotchas), rebuilds the pool, and writes
-it back to `config.json`. Ids and MAGI seats are derived from the model names,
-so nothing has to be named by hand.
+Each row also carries a context length, offered up to that model's own maximum.
+Applying loads anything that is not resident, and *reloads* a member whose
+resident context differs from the one picked — LM Studio fixes the context at
+load time, so changing it means an unload and a load (`lms load` with an
+explicit context and no TTL, for the reasons in Gotchas). The pool is then
+rebuilt and written back to `config.json`; ids and MAGI seats are derived from
+the model names, so nothing has to be named by hand.
 
 The same thing from a terminal:
 
@@ -262,6 +269,13 @@ it exists is correctness under load, not speed.
   empty drafts and a degraded fan-out until proposers were given
   `max(client, proposerMaxTokens)` — the client's cap governs the answer it
   receives, not the drafts it never sees.
+- **A slow pool needs two different timeouts raised, not one.**
+  `router.proposerTimeoutMs` bounds each upstream call and now sits at 600 s.
+  The other one is not a setting: Bun caps `idleTimeout` at 255 s, and a
+  fan-out that buffers everything sends nothing until it finishes, so a turn
+  longer than that was being torn down as idle. Streaming responses now open
+  immediately and emit SSE comment lines every 10 s while the pool works — a
+  340 s debate turn survives on 33 heartbeats.
 - **The pool's usable context is its smallest member** (65536 here). That is
   what `limit.context` in the opencode provider is set to.
 

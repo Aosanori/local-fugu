@@ -22,7 +22,7 @@ const SSE_HEADERS = {
  * where the winning candidate is emitted verbatim so its tool_calls survive
  * intact — a merged tool call is a broken tool call.
  */
-export function sseFromMessage(message: Message, finish: string, model: string): Response {
+function messageChunks(message: Message, finish: string, model: string): string[] {
   const cid = id()
   const parts: string[] = [chunk(model, cid, { role: 'assistant' }, null)]
 
@@ -41,8 +41,65 @@ export function sseFromMessage(message: Message, finish: string, model: string):
 
   parts.push(chunk(model, cid, {}, finish))
   parts.push('data: [DONE]\n\n')
+  return parts
+}
 
-  return new Response(parts.join(''), { headers: SSE_HEADERS })
+export function sseFromMessage(message: Message, finish: string, model: string): Response {
+  return new Response(messageChunks(message, finish, model).join(''), { headers: SSE_HEADERS })
+}
+
+/** What a turn resolves to: a finished message, or an upstream stream to relay. */
+export type Turn =
+  | { message: Message; finish: string }
+  | { pipe: Response; onEnd?: () => void }
+
+/**
+ * Answer immediately with an open stream and keep it warm while the pool works.
+ *
+ * A fan-out with a debate round can take minutes, and nothing reaches the
+ * client until it finishes — long enough for the connection to be torn down as
+ * idle (Bun caps idleTimeout at 255 s, well under a slow turn). SSE comment
+ * lines are ignored by every client and reset that clock.
+ */
+export function sseKeepAlive(model: string, work: () => Promise<Turn>, everyMs = 10000): Response {
+  const encoder = new TextEncoder()
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const beat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': magi\n\n'))
+        } catch {
+          clearInterval(beat)
+        }
+      }, everyMs)
+
+      try {
+        const turn = await work()
+        clearInterval(beat)
+
+        if ('pipe' in turn) {
+          const reader = turn.pipe.body!.getReader()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            controller.enqueue(value)
+          }
+          turn.onEnd?.()
+        } else {
+          for (const part of messageChunks(turn.message, turn.finish, model)) {
+            controller.enqueue(encoder.encode(part))
+          }
+        }
+        controller.close()
+      } catch (e) {
+        clearInterval(beat)
+        controller.error(e)
+      }
+    },
+  })
+
+  return new Response(body, { headers: SSE_HEADERS })
 }
 
 export function jsonFromMessage(message: Message, finish: string, model: string): Response {

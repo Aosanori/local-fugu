@@ -7,6 +7,7 @@ export type CatalogEntry = {
   type: string
   arch?: string
   maxContext?: number
+  loadedContext?: number
 }
 
 const headers = (u: Upstream) => (u.apiKey ? { Authorization: `Bearer ${u.apiKey}` } : {})
@@ -25,7 +26,14 @@ export async function catalog(): Promise<CatalogEntry[]> {
       const res = await fetch(native, { headers: headers(u), signal: AbortSignal.timeout(4000) })
       if (res.ok) {
         const body = (await res.json()) as {
-          data?: { id: string; type?: string; state?: string; arch?: string; max_context_length?: number }[]
+          data?: {
+            id: string
+            type?: string
+            state?: string
+            arch?: string
+            max_context_length?: number
+            loaded_context_length?: number
+          }[]
         }
         for (const m of body.data ?? []) {
           all.push({
@@ -35,6 +43,7 @@ export async function catalog(): Promise<CatalogEntry[]> {
             type: m.type ?? 'llm',
             arch: m.arch,
             maxContext: m.max_context_length,
+            loadedContext: m.loaded_context_length,
           })
         }
         continue
@@ -78,4 +87,14 @@ export async function load(model: string, contextLength: number): Promise<void> 
   const exitCode = await proc.exited
   clearTimeout(timer)
   if (exitCode !== 0) throw new Error(`lms load ${model} failed: ${err.trim().slice(-200)}`)
+}
+
+/** Drop a model so it can be brought back with a different context. */
+export async function unload(model: string): Promise<void> {
+  const lms = `${process.env.HOME}/.lmstudio/bin/lms`
+  const proc = Bun.spawn([lms, 'unload', model], { stdout: 'pipe', stderr: 'pipe' })
+  const timer = setTimeout(() => proc.kill(), 60000)
+  await new Response(proc.stderr).text()
+  await proc.exited
+  clearTimeout(timer)
 }

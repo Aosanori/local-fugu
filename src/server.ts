@@ -1,10 +1,10 @@
 import { join } from 'node:path'
 import { emit, newTurn, replay, subscribe } from './bus.ts'
-import { catalog, load } from './catalog.ts'
+import { catalog, load, unload } from './catalog.ts'
 import { config, member, probe, proposers, setPool } from './config.ts'
 import { consensus, debate, judge, propose, synthesisRequest, verifiedSelect } from './fuse.ts'
 import { modeOf, route } from './router.ts'
-import { jsonFromMessage, passthroughStream, sseFromMessage } from './sse.ts'
+import { jsonFromMessage, sseKeepAlive, type Turn } from './sse.ts'
 import { complete, stream, type ChatRequest, type Message } from './upstream.ts'
 import { verifyConfig } from './verify.ts'
 
@@ -23,7 +23,12 @@ const log = (parts: Record<string, unknown>) =>
 const nodes = () =>
   config.pool
     .filter((m) => m.available)
-    .map((m) => ({ id: m.id, label: m.label ?? m.id.toUpperCase(), model: m.model }))
+    .map((m) => ({
+      id: m.id,
+      label: m.label ?? m.id.toUpperCase(),
+      model: m.model,
+      context: m.contextLength,
+    }))
 
 /** Last thing the user actually asked, for the console's 提訴 panel. */
 const petition = (messages: Message[]): string => {
@@ -32,15 +37,12 @@ const petition = (messages: Message[]): string => {
   return text.replace(/\s+/g, ' ').slice(0, 240)
 }
 
-async function handleChat(req: Request): Promise<Response> {
-  const body = (await req.json()) as ChatRequest
+async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): Promise<Turn> {
   const virtual = body.model
 
-  if (process.env.MAGI_DUMP) await Bun.write(process.env.MAGI_DUMP, JSON.stringify(body, null, 2))
   const mode = modeOf(virtual)
   const decision = route(body, mode)
   const started = Date.now()
-  const wantsStream = body.stream !== false
   const turn = newTurn()
 
   emit({
@@ -55,19 +57,22 @@ async function handleChat(req: Request): Promise<Response> {
   // Strip our virtual id; each upstream call sets its own real model.
   const base: ChatRequest = { ...body, model: '' }
 
-  const single = async (m: ReturnType<typeof member>, request: ChatRequest, label: string) => {
+  const single = async (
+    m: ReturnType<typeof member>,
+    request: ChatRequest,
+    label: string,
+  ): Promise<Turn> => {
     emit({ type: 'node', turn, id: m.id, state: 'thinking' })
+    const settle = () => {
+      emit({ type: 'node', turn, id: m.id, state: 'winner' })
+      emit({ type: 'decision', turn, mode: label, winner: m.id, ms: Date.now() - started })
+    }
     if (wantsStream) {
-      const res = await stream(m, request, { signal: req.signal })
-      return passthroughStream(res, () => {
-        emit({ type: 'node', turn, id: m.id, state: 'winner' })
-        emit({ type: 'decision', turn, mode: label, winner: m.id, ms: Date.now() - started })
-      })
+      return { pipe: await stream(m, request, { signal: req.signal }), onEnd: settle }
     }
     const { message, finish_reason } = await complete(m, request, { signal: req.signal })
-    emit({ type: 'node', turn, id: m.id, state: 'winner' })
-    emit({ type: 'decision', turn, mode: label, winner: m.id, ms: Date.now() - started })
-    return jsonFromMessage(message, finish_reason, virtual)
+    settle()
+    return { message, finish: finish_reason }
   }
 
   if (decision.kind === 'passthrough') {
@@ -88,6 +93,7 @@ async function handleChat(req: Request): Promise<Response> {
       id: m.id,
       state: 'answered',
       ms: Date.now() - started,
+      tokens: first.tokens,
       note: call?.function.name ?? 'text',
     })
 
@@ -102,9 +108,7 @@ async function handleChat(req: Request): Promise<Response> {
         call: call?.function.name,
         ms: Date.now() - started,
       })
-      return wantsStream
-        ? sseFromMessage(first.message, first.finish_reason, virtual)
-        : jsonFromMessage(first.message, first.finish_reason, virtual)
+      return { message: first.message, finish: first.finish_reason }
     }
 
     // An edit is on the table, so it is worth paying for rivals to score against.
@@ -145,10 +149,7 @@ async function handleChat(req: Request): Promise<Response> {
       ms: Date.now() - started,
     })
 
-    const finish = winner.finish_reason || 'tool_calls'
-    return wantsStream
-      ? sseFromMessage(winner.message, finish, virtual)
-      : jsonFromMessage(winner.message, finish, virtual)
+    return { message: winner.message, finish: winner.finish_reason || 'tool_calls' }
   }
 
   const drafts = await propose(base, { signal: req.signal, turn })
@@ -202,10 +203,7 @@ async function handleChat(req: Request): Promise<Response> {
       ms: Date.now() - started,
     })
 
-    const finish = winner.finish_reason || 'tool_calls'
-    return wantsStream
-      ? sseFromMessage(winner.message, finish, virtual)
-      : jsonFromMessage(winner.message, finish, virtual)
+    return { message: winner.message, finish: winner.finish_reason || 'tool_calls' }
   }
 
   // Text turn: nothing here can be scored, so this is where debate earns its
@@ -242,11 +240,27 @@ async function handleChat(req: Request): Promise<Response> {
   }
 
   if (wantsStream) {
-    return passthroughStream(await stream(agg, synth, { signal: req.signal }), finish)
+    return { pipe: await stream(agg, synth, { signal: req.signal }), onEnd: finish }
   }
   const { message, finish_reason } = await complete(agg, synth, { signal: req.signal })
   finish()
-  return jsonFromMessage(message, finish_reason, virtual)
+  return { message, finish: finish_reason }
+}
+
+/**
+ * HTTP wrapper. Streaming clients get the connection opened immediately and
+ * held with heartbeats, because the pool can take minutes to answer.
+ */
+async function handleChat(req: Request): Promise<Response> {
+  const body = (await req.json()) as ChatRequest
+  if (process.env.MAGI_DUMP) await Bun.write(process.env.MAGI_DUMP, JSON.stringify(body, null, 2))
+
+  const wantsStream = body.stream !== false
+  if (wantsStream) return sseKeepAlive(body.model, () => runTurn(body, req, true))
+
+  const turn = await runTurn(body, req, false)
+  if ('pipe' in turn) throw new Error('unreachable: piped upstream for a non-streaming client')
+  return jsonFromMessage(turn.message, turn.finish, body.model)
 }
 
 /**
@@ -328,24 +342,33 @@ const server = Bun.serve({
     if (pathname === '/api/pool' && req.method === 'POST') {
       try {
         const body = (await req.json()) as {
-          members: { upstream: string; model: string }[]
+          members: { upstream: string; model: string; contextLength?: number }[]
           primary?: string
           aggregator?: string
           load?: boolean
         }
 
         // Anything picked but not resident has to be loaded first, or probe()
-        // will simply drop it.
+        // will simply drop it — and a member whose requested context differs
+        // from the resident one has to be cycled, since LM Studio fixes the
+        // context at load time.
         const warnings: string[] = []
         if (body.load !== false) {
-          const resident = new Set(
-            (await catalog()).filter((e) => e.state === 'loaded').map((e) => e.model),
+          const resident = new Map(
+            (await catalog()).filter((e) => e.state === 'loaded').map((e) => [e.model, e]),
           )
           for (const m of body.members) {
-            if (resident.has(m.model)) continue
+            const want = m.contextLength ?? config.lmsContextLength ?? 65536
+            const have = resident.get(m.model)
+            if (have && have.loadedContext === want) continue
             try {
-              log({ loading: m.model })
-              await load(m.model, config.lmsContextLength ?? 65536)
+              if (have) {
+                log({ reloading: m.model, from: have.loadedContext ?? '?', to: want })
+                await unload(m.model)
+              } else {
+                log({ loading: m.model, context: want })
+              }
+              await load(m.model, want)
             } catch (e) {
               warnings.push((e as Error).message)
             }

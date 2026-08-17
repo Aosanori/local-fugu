@@ -38,7 +38,7 @@ export async function complete(
   m: PoolMember,
   body: ChatRequest,
   opts: { timeoutMs?: number; signal?: AbortSignal } = {},
-): Promise<{ message: Message; finish_reason: string }> {
+): Promise<{ message: Message; finish_reason: string; tokens: number }> {
   const signal = opts.timeoutMs
     ? AbortSignal.any([AbortSignal.timeout(opts.timeoutMs), ...(opts.signal ? [opts.signal] : [])])
     : opts.signal
@@ -56,10 +56,15 @@ export async function complete(
 
     const json = (await res.json()) as {
       choices: { message: Message; finish_reason: string }[]
+      usage?: { prompt_tokens?: number; total_tokens?: number }
     }
     const choice = json.choices?.[0]
     if (!choice) throw new Error(`${m.id}: upstream returned no choices`)
-    return { message: choice.message, finish_reason: choice.finish_reason }
+    return {
+      message: choice.message,
+      finish_reason: choice.finish_reason,
+      tokens: json.usage?.total_tokens ?? json.usage?.prompt_tokens ?? 0,
+    }
   } finally {
     release()
   }
