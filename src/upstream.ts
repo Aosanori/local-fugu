@@ -45,12 +45,15 @@ export async function complete(
 
   const release = await acquire(m.upstream)
   try {
+    // timeout: false opts out of Bun's own 300 s fetch default, which was
+    // killing long prefills regardless of the ceiling passed in `signal`.
     const res = await fetch(`${upstreamOf(m).baseURL}/chat/completions`, {
       method: 'POST',
       headers: headers(m),
       body: JSON.stringify({ ...body, model: m.model, stream: false }),
       signal,
-    })
+      timeout: false,
+    } as never)
 
     if (!res.ok) throw new Error(`${m.id}: upstream ${res.status} ${await res.text()}`)
 
@@ -87,7 +90,8 @@ export async function stream(
       headers: headers(m),
       body: JSON.stringify({ ...body, model: m.model, stream: true }),
       signal: opts.signal,
-    })
+      timeout: false,
+    } as never)
     if (!res.ok) throw new Error(`${m.id}: upstream ${res.status} ${await res.text()}`)
 
     const source = res.body!.getReader()

@@ -42,6 +42,7 @@ export async function propose(
 ): Promise<Proposal[]> {
   const { signal, exclude = [], turn = '' } = opts
   const pool = proposers().filter((m) => !exclude.includes(m.id))
+  const ceiling = turnTimeoutMs(req)
 
   const settled = await Promise.allSettled(
     pool.map(async (m): Promise<Proposal> => {
@@ -56,7 +57,7 @@ export async function propose(
           ...req,
           max_tokens: Math.max(req.max_tokens ?? 0, config.router.proposerMaxTokens),
         },
-        { timeoutMs: turnTimeoutMs(req), signal },
+        { timeoutMs: ceiling, signal },
       )
       const ms = Date.now() - started
       emit({
@@ -74,7 +75,9 @@ export async function propose(
 
   settled.forEach((s, i) => {
     if (s.status === 'rejected') {
-      console.warn(`[magi] proposer ${pool[i].id} failed: ${s.reason}`)
+      console.warn(
+        `[magi] proposer ${pool[i].id} failed (ceiling ${Math.round(ceiling / 1000)}s): ${s.reason}`,
+      )
       emit({ type: 'node', turn, id: pool[i].id, state: 'error', note: String(s.reason).slice(0, 80) })
     }
   })

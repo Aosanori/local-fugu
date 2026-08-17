@@ -275,6 +275,12 @@ it exists is correctness under load, not speed.
   empty drafts and a degraded fan-out until proposers were given
   `max(client, proposerMaxTokens)` — the client's cap governs the answer it
   receives, not the drafts it never sees.
+- **Bun's fetch kills any request at 300 s, regardless of your own signal.**
+  Proposers on long prefills died with `TimeoutError` at five minutes even
+  though the configured ceiling was far higher — reproduced exactly: a 320 s
+  response fails at 300 s with only an AbortSignal, and succeeds with
+  `timeout: false` in the fetch options. Every upstream and feed fetch now
+  passes it.
 - **A slow pool needs two different timeouts raised, not one.**
   `router.proposerTimeoutMs` bounds each upstream call and now sits at 600 s.
   The other one is not a setting: Bun caps `idleTimeout` at 255 s, and a

@@ -271,6 +271,12 @@ function handle(e: any) {
     const n = node(e.id)
     if (n) {
       n.state = e.state
+      // A seat re-entering deliberation must not keep wearing the error or
+      // stats of its previous attempt.
+      if ((e.state === 'thinking' || e.state === 'debating') && !e.note) {
+        n.note = ''
+        n.tokens = undefined
+      }
       if (e.note) n.note = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
       if (e.tokens) n.tokens = e.tokens
     }
@@ -313,7 +319,7 @@ async function follow() {
 
   for (;;) {
     try {
-      const res = await fetch(`${BASE}/events`)
+      const res = await fetch(`${BASE}/events`, { timeout: false } as never)
       everConnected = true
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
@@ -339,15 +345,14 @@ async function follow() {
   }
 }
 
-process.stdout.write('\x1b[?25l\x1b[2J')
+process.stdout.write('\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H')
 const ticker = setInterval(() => {
   if (state.busy) state.elapsed = `${((Date.now() - state.since) / 1000).toFixed(1)}s`
   render()
 }, 200)
 
 const bye = () => {
-  clearInterval(ticker)
-  process.stdout.write('\x1b[?25h\n')
+  restore()
   process.exit(0)
 }
 process.on('SIGINT', bye)
@@ -367,7 +372,7 @@ export function pushLog(line: string): void {
 /** Put the terminal back the way it was found. */
 export function restore(): void {
   clearInterval(ticker)
-  process.stdout.write('\x1b[?25h\n')
+  process.stdout.write('\x1b[?1049l\x1b[?25h')
 }
 
 render()

@@ -427,6 +427,12 @@
       if (!el) return
       el.className = 'node ' + e.state
       el.querySelector('.verdict').textContent = VERDICT[e.state] ?? ''
+      // A seat re-entering deliberation must not keep wearing the error or
+      // stats of its previous attempt.
+      if ((e.state === 'thinking' || e.state === 'debating') && !e.note) {
+        el.querySelector('.score').textContent = ''
+        el.querySelector('.ctx').classList.remove('on')
+      }
       if (e.note) el.querySelector('.score').textContent = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
       if (e.tokens) showUsage(el, e.tokens)
       if (e.state === 'error') logLine(`<span class="rej">${e.id} failed: ${e.note ?? ''}</span>`, 'rej')

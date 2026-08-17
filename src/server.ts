@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import pkg from '../package.json'
 import { emit, newTurn, replay, subscribe } from './bus.ts'
 import { catalog, load, unload } from './catalog.ts'
 import { config, member, probe, proposers, setPool } from './config.ts'
@@ -447,6 +448,7 @@ const server = Bun.serve({
       return Response.json(
         {
           ok: true,
+          version: pkg.version,
           pool: config.pool.map((m) => ({ id: m.id, model: m.model, available: !!m.available })),
         },
         { headers: CORS },
@@ -478,6 +480,7 @@ const server = Bun.serve({
 })
 
 log({
+  version: pkg.version,
   listening: `http://localhost:${server.port}/v1`,
   console: `http://localhost:${server.port}/`,
   pool: proposers()
