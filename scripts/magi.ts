@@ -1,0 +1,272 @@
+#!/usr/bin/env bun
+/**
+ * MAGI console for the terminal. Same event feed as the web console.
+ *
+ *   ./scripts/magi.ts            # follows http://localhost:4141
+ *   FUGU_URL=... ./scripts/magi.ts
+ */
+const BASE = process.env.FUGU_URL ?? 'http://localhost:4141'
+
+const rgb = (r: number, g: number, b: number, bg = false) => `\x1b[${bg ? 48 : 38};2;${r};${g};${b}m`
+const RESET = '\x1b[0m'
+const BOLD = '\x1b[1m'
+const ORANGE = rgb(224, 123, 31)
+const ORANGE_HOT = rgb(255, 165, 58)
+const TEAL = rgb(76, 143, 125)
+const GREY = rgb(120, 120, 120)
+const DIMTEXT = rgb(90, 90, 90)
+
+type NodeState = 'idle' | 'thinking' | 'answered' | 'winner' | 'rejected' | 'contributed' | 'error'
+
+const SKIN: Record<NodeState, { bg: string; fg: string; verdict: string }> = {
+  idle: { bg: rgb(38, 50, 66, true), fg: rgb(150, 168, 190), verdict: '' },
+  thinking: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '審議中' },
+  answered: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '回答' },
+  winner: { bg: rgb(217, 131, 36, true), fg: rgb(16, 12, 5), verdict: '可決' },
+  contributed: { bg: rgb(60, 84, 110, true), fg: rgb(200, 214, 230), verdict: '参考' },
+  rejected: { bg: rgb(38, 49, 65, true), fg: rgb(111, 130, 150), verdict: '否決' },
+  error: { bg: rgb(201, 67, 47, true), fg: rgb(21, 4, 4), verdict: 'ERROR' },
+}
+
+type Node = { id: string; label: string; model: string; state: NodeState; note: string }
+
+const state = {
+  nodes: [] as Node[],
+  code: '----',
+  route: '-',
+  prompt: '',
+  busy: false,
+  since: 0,
+  decision: '-',
+  baseline: '-' as string | number,
+  best: '-' as string | number,
+  elapsed: '-',
+  log: [] as string[],
+}
+
+/** East Asian wide characters occupy two cells; padding has to know that. */
+const width = (s: string) =>
+  [...s].reduce((n, ch) => n + (/[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/.test(ch) ? 2 : 1), 0)
+
+const clip = (s: string, max: number) => {
+  let out = ''
+  for (const ch of s) {
+    if (width(out + ch) > max) break
+    out += ch
+  }
+  return out
+}
+
+const center = (s: string, w: number) => {
+  const text = clip(s, w)
+  const pad = w - width(text)
+  const left = Math.floor(pad / 2)
+  return ' '.repeat(left) + text + ' '.repeat(pad - left)
+}
+
+const pad = (s: string, w: number) => {
+  const text = clip(s, w)
+  return text + ' '.repeat(Math.max(0, w - width(text)))
+}
+
+/**
+ * One MAGI panel as an array of lines, drawn with slanted shoulders.
+ *
+ * Text handed to center() must stay free of escape sequences — the width
+ * calculation counts characters, so an embedded colour code gets measured as
+ * content and the row is truncated mid-escape.
+ */
+function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right'): string[] {
+  const skin = SKIN[node?.state ?? 'idle']
+  const slant = Math.max(2, Math.round(w * 0.08))
+
+  const rows: { text: string; bold?: boolean }[] = [
+    { text: node?.label ?? '—', bold: true },
+    { text: node?.model ?? '' },
+    { text: skin.verdict, bold: true },
+    { text: node?.note ?? '' },
+  ]
+
+  const indents: [number, number][] =
+    shape === 'top'
+      ? [
+          [0, 0],
+          [0, 0],
+          [slant, slant],
+          [slant * 2, slant * 2],
+        ]
+      : shape === 'left'
+        ? [
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, slant * 2],
+          ]
+        : [
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [slant * 2, 0],
+          ]
+
+  return rows.map((row, i) => {
+    const [l, r] = indents[i]
+    return (
+      ' '.repeat(l) +
+      skin.bg +
+      skin.fg +
+      (row.bold ? BOLD : '') +
+      center(row.text, w - l - r) +
+      RESET +
+      ' '.repeat(r)
+    )
+  })
+}
+
+const PREFERRED: Record<string, number> = { BALTHASAR: 0, CASPER: 1, MELCHIOR: 2 }
+
+function placed(): (Node | undefined)[] {
+  const slots: (Node | undefined)[] = [undefined, undefined, undefined]
+  const spill: Node[] = []
+  for (const n of state.nodes) {
+    const slot = PREFERRED[n.label.split('·')[0].toUpperCase()]
+    if (slot !== undefined && !slots[slot]) slots[slot] = n
+    else spill.push(n)
+  }
+  for (const n of spill) {
+    const free = slots.indexOf(undefined)
+    if (free === -1) break
+    slots[free] = n
+  }
+  return slots
+}
+
+function render() {
+  const cols = Math.max(64, Math.min(process.stdout.columns ?? 100, 120))
+  const out: string[] = []
+  const rule = (label: string) => ORANGE + BOLD + label + RESET + TEAL + '─'.repeat(Math.max(0, Math.floor(cols / 2) - width(label) - 2)) + RESET
+
+  out.push(`${rgb(185, 185, 185, true)}${rgb(17, 17, 17)} FRONT ${RESET} ${DIMTEXT}OPENAI-COMPATIBLE ENDPOINT ${ORANGE}${BASE}/v1${RESET}`)
+  out.push('')
+  out.push(rule('提訴 ') + ' ' + rule('決議 '))
+  out.push('')
+
+  const status = state.busy ? `${ORANGE}┤ 審議中 ├${RESET}` : `${DIMTEXT}┤ 待機中 ├${RESET}`
+  out.push(`${ORANGE}CODE : ${BOLD}${state.code}${RESET}${' '.repeat(Math.max(1, cols - 20 - width(state.code)))}${status}`)
+  out.push(`${DIMTEXT}FILE:MAGI.SYS  ROUTE:${state.route}  PRIORITY:AAA${RESET}`)
+  out.push('')
+  out.push(`${GREY}${pad(state.prompt || '— 提訴なし —', cols)}${RESET}`)
+  out.push('')
+
+  const slots = placed()
+  const topW = Math.floor(cols * 0.42)
+  const sideW = Math.floor(cols * 0.44)
+  const gap = cols - sideW * 2
+
+  for (const line of panel(slots[0], topW, 'top')) {
+    out.push(' '.repeat(Math.floor((cols - topW) / 2)) + line)
+  }
+  out.push(' '.repeat(Math.floor((cols - 7) / 2)) + ORANGE + BOLD + 'M A G I' + RESET)
+
+  const left = panel(slots[1], sideW, 'left')
+  const right = panel(slots[2], sideW, 'right')
+  for (let i = 0; i < left.length; i++) out.push(left[i] + ' '.repeat(Math.max(0, gap)) + right[i])
+
+  out.push('')
+  out.push(`${DIMTEXT}DECISION ${RESET}${state.decision}   ${DIMTEXT}BASELINE ${RESET}${state.baseline}   ${DIMTEXT}BEST ${RESET}${state.best}   ${DIMTEXT}ELAPSED ${RESET}${state.elapsed}`)
+  out.push(TEAL + '─'.repeat(cols) + RESET)
+  for (const line of state.log.slice(0, 6)) out.push(DIMTEXT + clip(line, cols) + RESET)
+
+  process.stdout.write('\x1b[H' + out.map((l) => l + '\x1b[K').join('\n') + '\x1b[J')
+}
+
+const node = (id: string) => state.nodes.find((n) => n.id === id)
+
+function handle(e: any) {
+  if (e.type === 'hello') {
+    state.nodes = e.nodes.map((n: any) => ({ ...n, state: 'idle' as NodeState, note: '' }))
+  } else if (e.type === 'turn') {
+    state.code = e.turn.toUpperCase()
+    state.route = e.route.toUpperCase()
+    state.prompt = e.prompt || '— 継続審議 —'
+    state.busy = true
+    state.since = Date.now()
+    state.decision = '-'
+    state.baseline = '-'
+    state.best = '-'
+    for (const n of state.nodes) {
+      n.state = 'idle'
+      n.note = ''
+    }
+    state.log.unshift(`${e.turn} ${e.route} — ${e.reason}`)
+  } else if (e.type === 'node') {
+    const n = node(e.id)
+    if (n) {
+      n.state = e.state
+      if (e.note) n.note = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
+    }
+  } else if (e.type === 'verify') {
+    state.baseline = e.baseline
+    state.best = `${e.best}${e.regression ? ' REGRESSION' : ''}`
+    for (const s of e.scores) {
+      const n = node(s.id)
+      if (n) n.note = `${s.total} · ${s.detail}`
+    }
+    state.log.unshift(`verify baseline=${e.baseline} best=${e.best}`)
+  } else if (e.type === 'decision') {
+    state.busy = false
+    // Anyone still lit when the verdict lands did not make it into the
+    // decision — a slow proposer, or one whose draft carried no tool call.
+    for (const n of state.nodes) {
+      if (n.state === 'thinking' || n.state === 'answered') n.state = 'rejected'
+    }
+    state.decision = `${e.mode} → ${e.winner ?? '-'}${e.call ? ' / ' + e.call : ''}`
+    state.elapsed = `${(e.ms / 1000).toFixed(1)}s`
+    state.log.unshift(`${e.turn} ${e.mode} winner=${e.winner ?? '-'} ${(e.ms / 1000).toFixed(1)}s`)
+  }
+  state.log = state.log.slice(0, 20)
+  render()
+}
+
+async function follow() {
+  for (;;) {
+    try {
+      const res = await fetch(`${BASE}/events`)
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+        for (const part of parts) {
+          const line = part.split('\n').find((l) => l.startsWith('data: '))
+          if (line) handle(JSON.parse(line.slice(6)))
+        }
+      }
+    } catch {
+      state.log.unshift(`disconnected — retrying`)
+      render()
+    }
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+}
+
+process.stdout.write('\x1b[?25l\x1b[2J')
+const ticker = setInterval(() => {
+  if (state.busy) state.elapsed = `${((Date.now() - state.since) / 1000).toFixed(1)}s`
+  render()
+}, 200)
+
+const bye = () => {
+  clearInterval(ticker)
+  process.stdout.write('\x1b[?25h\n')
+  process.exit(0)
+}
+process.on('SIGINT', bye)
+process.on('SIGTERM', bye)
+
+render()
+await follow()

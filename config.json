@@ -1,0 +1,106 @@
+{
+  "listen": 4141,
+  "upstreams": {
+    "lmstudio": {
+      "baseURL": "http://localhost:1234/v1",
+      "apiKey": "lm-studio",
+      "maxConcurrency": 3
+    },
+    "ollama": {
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "maxConcurrency": 1
+    }
+  },
+  "pool": [
+    {
+      "id": "qwen",
+      "upstream": "lmstudio",
+      "model": "qwen/qwen3.8-27b",
+      "roles": [
+        "proposer",
+        "aggregator",
+        "primary"
+      ],
+      "label": "MELCHIOR·1"
+    },
+    {
+      "id": "gemma",
+      "upstream": "lmstudio",
+      "model": "google/gemma-4-31b",
+      "roles": [
+        "proposer"
+      ],
+      "label": "BALTHASAR·2"
+    },
+    {
+      "id": "muse",
+      "upstream": "lmstudio",
+      "model": "meta/muse-glimmer",
+      "roles": [
+        "proposer"
+      ],
+      "label": "CASPER·3"
+    },
+    {
+      "id": "qwen36",
+      "upstream": "ollama",
+      "model": "qwen3.6:35b-mlx",
+      "roles": [
+        "proposer"
+      ],
+      "optional": true,
+      "enabled": false,
+      "label": "CASPER·4"
+    }
+  ],
+  "primary": "qwen",
+  "aggregator": "qwen",
+  "verify": {
+    "enabled": true,
+    "editTools": [
+      "edit",
+      "write"
+    ],
+    "workspaceMarkers": [
+      "pubspec.yaml",
+      "package.json",
+      "Cargo.toml",
+      "go.mod"
+    ],
+    "maxCandidates": 3,
+    "scorers": [
+      {
+        "name": "analyze",
+        "match": "\\.dart$",
+        "cmd": [
+          "dart",
+          "analyze"
+        ],
+        "weight": 10,
+        "penaltyPattern": "^\\s+(error|warning|info)\\s+-\\s",
+        "penaltyWeight": -1,
+        "timeoutMs": 120000
+      },
+      {
+        "name": "test",
+        "match": "\\.dart$",
+        "cmd": [
+          "dart",
+          "test"
+        ],
+        "weight": 20,
+        "timeoutMs": 180000
+      }
+    ]
+  },
+  "router": {
+    "trivialChars": 200,
+    "fanoutOnContinuation": false,
+    "speculativeEdit": true,
+    "proposerMaxTokens": 2048,
+    "proposerTimeoutMs": 180000,
+    "minProposers": 2,
+    "reasoningHeadroom": 2048
+  }
+}

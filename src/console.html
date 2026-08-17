@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAGI · local-fugu</title>
+<style>
+  :root {
+    --bg: #000;
+    --panel: #5b7fa6;
+    --panel-dim: #2f4056;
+    --panel-hot: #d98324;
+    --ink: #0a0a0a;
+    --orange: #e07b1f;
+    --orange-bright: #ffa53a;
+    --teal: #4c8f7d;
+    --red: #c9432f;
+    --grid: #1a1a1a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--orange);
+    font-family: "DIN Alternate", "Helvetica Neue", "Hiragino Sans", "Yu Gothic", monospace;
+    min-height: 100vh;
+    padding: 18px;
+    background-image: repeating-linear-gradient(0deg, var(--grid) 0 1px, transparent 1px 4px);
+  }
+  .frame { max-width: 1080px; margin: 0 auto; }
+
+  .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .tag {
+    background: #b9b9b9; color: #111; font-weight: 700; letter-spacing: .18em;
+    padding: 3px 12px; font-size: 13px;
+  }
+  .endpoint { font-size: 12px; letter-spacing: .06em; color: #7d6244; }
+  .endpoint b { color: var(--orange); font-weight: 600; }
+
+  .headrow { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .head { border-bottom: 3px solid var(--teal); padding-bottom: 2px; }
+  .head h1 {
+    margin: 0; font-size: clamp(28px, 5vw, 46px); letter-spacing: .1em;
+    color: var(--orange); font-weight: 800; line-height: 1.05;
+  }
+  .head.right { text-align: right; }
+
+  .meta { display: grid; grid-template-columns: 1fr auto; gap: 16px; margin: 10px 0 4px; }
+  .code { font-size: 20px; letter-spacing: .1em; }
+  .sysinfo { font-size: 11px; line-height: 1.5; letter-spacing: .12em; color: #a8621d; }
+  .status {
+    align-self: start; justify-self: end; border: 2px solid var(--orange);
+    padding: 6px 14px; font-size: 20px; letter-spacing: .2em; color: var(--orange);
+    min-width: 128px; text-align: center;
+  }
+  .status.active { animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  .petition {
+    margin: 6px 0 14px; font-size: 12px; color: #cfcfcf; letter-spacing: .04em;
+    min-height: 32px; border-left: 3px solid var(--panel-dim); padding: 4px 0 4px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .magi { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 96px; }
+  .slot-top { grid-column: 1 / -1; display: flex; justify-content: center; }
+  .node {
+    position: relative; width: 100%; max-width: 340px; min-height: 132px;
+    background: var(--panel-dim); color: #d7e3ef;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 14px; transition: background .25s, color .25s, box-shadow .25s;
+  }
+  .slot-top .node { clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%); }
+  .left  .node { clip-path: polygon(0 0, 100% 0, 100% 78%, 84% 100%, 0 100%); margin-left: auto; }
+  .right .node { clip-path: polygon(0 0, 100% 0, 100% 100%, 16% 100%, 0 78%); }
+  .left { display: flex; }
+  .right { display: flex; }
+
+  .node.thinking { background: var(--panel); color: var(--ink); }
+  .node.thinking .verdict { animation: softblink 1.1s steps(2, start) infinite; }
+  @keyframes softblink { 50% { opacity: .35; } }
+  .node.answered { background: var(--panel); color: var(--ink); }
+  .node.winner   { background: var(--panel-hot); color: #100c05; box-shadow: 0 0 0 2px var(--orange-bright); }
+  .node.contributed { background: #3c546e; color: #c8d6e6; }
+  .node.rejected { background: #263141; color: #6f8296; }
+  .node.error    { background: var(--red); color: #150404; }
+
+  .name { font-size: clamp(15px, 2.4vw, 22px); font-weight: 800; letter-spacing: .08em; }
+  .model { font-size: 10px; letter-spacing: .06em; opacity: .78; margin-top: 3px; }
+  .verdict { font-size: 15px; font-weight: 700; letter-spacing: .16em; margin-top: 8px; min-height: 20px; }
+  .score { font-size: 10px; letter-spacing: .04em; opacity: .85; margin-top: 2px; font-family: ui-monospace, monospace; }
+
+  .hub {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    color: var(--orange); font-size: 22px; font-weight: 800; letter-spacing: .3em;
+    pointer-events: none;
+  }
+
+  .footer { margin-top: 16px; display: grid; grid-template-columns: 1fr 260px; gap: 18px; }
+  .log {
+    border-top: 1px solid #33251a; padding-top: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    line-height: 1.65; color: #8d6a3f; max-height: 168px; overflow-y: auto;
+  }
+  .log b { color: var(--orange-bright); font-weight: 600; }
+  .log .rej { color: var(--red); }
+  .readout { border-top: 1px solid #33251a; padding-top: 8px; font-size: 11px; letter-spacing: .1em; line-height: 1.8; }
+  .readout span { color: #cfcfcf; }
+
+  @media (max-width: 720px) {
+    .magi { gap: 10px 20px; }
+    .headrow { gap: 10px; }
+    .footer { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="topbar">
+    <div class="tag">FRONT</div>
+    <div class="endpoint">OPENAI-COMPATIBLE ENDPOINT <b id="endpoint">—</b></div>
+  </div>
+
+  <div class="headrow">
+    <div class="head"><h1>提訴</h1></div>
+    <div class="head right"><h1>決議</h1></div>
+  </div>
+
+  <div class="meta">
+    <div>
+      <div class="code">CODE : <span id="code">----</span></div>
+      <div class="sysinfo">
+        FILE:MAGI.SYS<br />
+        ROUTE:<span id="route">-</span><br />
+        EX_MODE:<span id="exmode">OFF</span><br />
+        PRIORITY:AAA
+      </div>
+    </div>
+    <div class="status" id="status">待機中</div>
+  </div>
+
+  <div class="petition" id="petition">— 提訴なし —</div>
+
+  <div class="magi">
+    <div class="slot-top">
+      <div class="node" data-slot="0">
+        <div class="name">—</div><div class="model"></div>
+        <div class="verdict"></div><div class="score"></div>
+      </div>
+    </div>
+    <div class="left">
+      <div class="node" data-slot="1">
+        <div class="name">—</div><div class="model"></div>
+        <div class="verdict"></div><div class="score"></div>
+      </div>
+    </div>
+    <div class="right">
+      <div class="node" data-slot="2">
+        <div class="name">—</div><div class="model"></div>
+        <div class="verdict"></div><div class="score"></div>
+      </div>
+    </div>
+    <div class="hub">MAGI</div>
+  </div>
+
+  <div class="footer">
+    <div class="log" id="log"></div>
+    <div class="readout">
+      DECISION : <span id="decision">-</span><br />
+      BASELINE : <span id="baseline">-</span><br />
+      BEST&nbsp;&nbsp;&nbsp;&nbsp; : <span id="best">-</span><br />
+      ELAPSED&nbsp; : <span id="elapsed">-</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  const slots = [...document.querySelectorAll('.node')]
+  const byId = new Map()          // member id -> slot element
+  let activeTurn = null
+  let activeSince = 0
+
+  $('endpoint').textContent = location.origin + '/v1'
+
+  const VERDICT = {
+    thinking: '審議中',
+    answered: '回答',
+    winner: '可決',
+    contributed: '参考',
+    rejected: '否決',
+    error: 'ERROR',
+    idle: '',
+  }
+
+  // Slot 0 is the top wedge, 1 is bottom-left, 2 is bottom-right — the classic
+  // BALTHASAR / CASPER / MELCHIOR arrangement. Anything else fills what is left.
+  const PREFERRED = { BALTHASAR: 0, CASPER: 1, MELCHIOR: 2 }
+
+  function place(nodes) {
+    const placed = new Array(slots.length).fill(null)
+    const spill = []
+    for (const n of nodes) {
+      const slot = PREFERRED[(n.label ?? '').split('·')[0].toUpperCase()]
+      if (slot !== undefined && placed[slot] === null) placed[slot] = n
+      else spill.push(n)
+    }
+    for (const n of spill) {
+      const free = placed.indexOf(null)
+      if (free === -1) break
+      placed[free] = n
+    }
+    return placed
+  }
+
+  function mount(nodes) {
+    byId.clear()
+    const placed = place(nodes)
+    slots.forEach((el, i) => {
+      const n = placed[i]
+      el.className = 'node'
+      el.querySelector('.name').textContent = n ? n.label : '—'
+      el.querySelector('.model').textContent = n ? n.model : ''
+      el.querySelector('.verdict').textContent = ''
+      el.querySelector('.score').textContent = ''
+      if (n) byId.set(n.id, el)
+    })
+  }
+
+  function resetNodes() {
+    for (const el of byId.values()) {
+      el.className = 'node'
+      el.querySelector('.verdict').textContent = ''
+      el.querySelector('.score').textContent = ''
+    }
+  }
+
+  function logLine(html, cls) {
+    const el = document.createElement('div')
+    if (cls) el.className = cls
+    el.innerHTML = html
+    $('log').prepend(el)
+    while ($('log').childElementCount > 60) $('log').lastElementChild.remove()
+  }
+
+  function setBusy(busy) {
+    $('status').textContent = busy ? '審議中' : '待機中'
+    $('status').classList.toggle('active', busy)
+  }
+
+  setInterval(() => {
+    if (activeTurn) $('elapsed').textContent = ((Date.now() - activeSince) / 1000).toFixed(1) + 's'
+  }, 100)
+
+  function handle(e) {
+    if (e.type === 'hello') return mount(e.nodes)
+
+    if (e.type === 'turn') {
+      activeTurn = e.turn
+      activeSince = Date.now()
+      resetNodes()
+      setBusy(true)
+      $('code').textContent = e.turn.toUpperCase()
+      $('route').textContent = e.route.toUpperCase()
+      $('exmode').textContent = e.tools ? 'TOOLS:' + e.tools : 'OFF'
+      $('petition').textContent = e.prompt || '— 継続審議 —'
+      $('decision').textContent = '-'
+      $('baseline').textContent = '-'
+      $('best').textContent = '-'
+      logLine(`<b>${e.turn}</b> ${e.route} — ${e.reason}`)
+      return
+    }
+
+    if (e.type === 'node') {
+      const el = byId.get(e.id)
+      if (!el) return
+      el.className = 'node ' + e.state
+      el.querySelector('.verdict').textContent = VERDICT[e.state] ?? ''
+      if (e.note) el.querySelector('.score').textContent = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
+      if (e.state === 'error') logLine(`<span class="rej">${e.id} failed: ${e.note ?? ''}</span>`, 'rej')
+      return
+    }
+
+    if (e.type === 'verify') {
+      $('baseline').textContent = e.baseline
+      $('best').textContent = e.best + (e.regression ? ' (REGRESSION)' : '')
+      for (const s of e.scores) {
+        const el = byId.get(s.id)
+        if (el) el.querySelector('.score').textContent = `score ${s.total} · ${s.detail}`
+      }
+      logLine(`verify baseline=${e.baseline} best=${e.best} ${e.scores.map((s) => s.id + ':' + s.total).join(' ')}`)
+      return
+    }
+
+    if (e.type === 'decision') {
+      activeTurn = null
+      setBusy(false)
+      // Anyone still lit when the verdict lands did not make it into the
+      // decision — a slow proposer, or one whose draft carried no tool call.
+      for (const el of byId.values()) {
+        if (el.classList.contains('thinking') || el.classList.contains('answered')) {
+          el.className = 'node rejected'
+          el.querySelector('.verdict').textContent = VERDICT.rejected
+        }
+      }
+      $('decision').textContent = `${e.mode} → ${e.winner ?? '-'}${e.call ? ' / ' + e.call : ''}`
+      $('elapsed').textContent = (e.ms / 1000).toFixed(1) + 's'
+      logLine(`<b>${e.turn}</b> ${e.mode} winner=${e.winner ?? '-'} ${e.call ?? ''} ${(e.ms / 1000).toFixed(1)}s`)
+    }
+  }
+
+  function connect() {
+    const es = new EventSource('/events')
+    es.onmessage = (m) => handle(JSON.parse(m.data))
+    es.onerror = () => {
+      es.close()
+      setBusy(false)
+      setTimeout(connect, 2000)
+    }
+  }
+  connect()
+</script>
+</body>
+</html>
