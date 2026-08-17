@@ -7,12 +7,23 @@ as a single model. opencode talks to it as an ordinary provider.
 The part of Fugu that cannot be copied is the *learned* query-adaptive routing.
 Here the routing policy is a hand-written table in `src/router.ts`.
 
+## Install
+
+```bash
+brew install aosanori/tap/local-fugu
+```
+
+Gives you `local-fugu` (the gateway) and `magi` (the console). The pool config
+lands in `$(brew --prefix)/etc/local-fugu/config.json` and survives upgrades.
+
 ## Running
 
 ```bash
 ./scripts/load-models.sh   # load the pool (see "Gotchas" — this matters)
 ./scripts/serve.sh         # gateway on http://localhost:4141/v1
 ```
+
+From a Homebrew install, `local-fugu` and `magi` replace the two scripts.
 
 ```bash
 curl -s http://localhost:4141/health
