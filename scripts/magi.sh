@@ -3,7 +3,15 @@
 # mise shim errors out when no global bun version is set.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Follow symlinks back to the checkout, so this works when linked onto PATH
+# as `magi` from anywhere.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$DIR/$SOURCE"
+done
+cd "$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 
 BUN="$(command -v bun || true)"
 if [ -z "$BUN" ] || ! "$BUN" --version >/dev/null 2>&1; then
