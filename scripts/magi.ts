@@ -26,16 +26,19 @@ type NodeState =
   | 'contributed'
   | 'error'
 
-const SKIN: Record<NodeState, { bg: string; fg: string; verdict: string }> = {
-  idle: { bg: rgb(38, 50, 66, true), fg: rgb(150, 168, 190), verdict: '' },
-  thinking: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '審議中' },
-  debating: { bg: rgb(122, 152, 186, true), fg: rgb(10, 10, 10), verdict: '討議中' },
-  answered: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '回答' },
-  winner: { bg: rgb(217, 131, 36, true), fg: rgb(16, 12, 5), verdict: '可決' },
-  contributed: { bg: rgb(60, 84, 110, true), fg: rgb(200, 214, 230), verdict: '参考' },
-  rejected: { bg: rgb(38, 49, 65, true), fg: rgb(111, 130, 150), verdict: '否決' },
-  error: { bg: rgb(201, 67, 47, true), fg: rgb(21, 4, 4), verdict: 'ERROR' },
+type Rgb = [number, number, number]
+const SKIN: Record<NodeState, { bg: Rgb; fg: Rgb; verdict: string }> = {
+  idle: { bg: [38, 50, 66], fg: [150, 168, 190], verdict: '' },
+  thinking: { bg: [91, 127, 166], fg: [10, 10, 10], verdict: '審議中' },
+  debating: { bg: [122, 152, 186], fg: [10, 10, 10], verdict: '討議中' },
+  answered: { bg: [91, 127, 166], fg: [10, 10, 10], verdict: '回答' },
+  winner: { bg: [217, 131, 36], fg: [16, 12, 5], verdict: '可決' },
+  contributed: { bg: [60, 84, 110], fg: [200, 214, 230], verdict: '参考' },
+  rejected: { bg: [38, 49, 65], fg: [111, 130, 150], verdict: '否決' },
+  error: { bg: [201, 67, 47], fg: [21, 4, 4], verdict: 'ERROR' },
 }
+
+const paint = (c: Rgb, bg = false) => rgb(c[0], c[1], c[2], bg)
 
 type Node = { id: string; label: string; model: string; state: NodeState; note: string }
 
@@ -80,7 +83,13 @@ const pad = (s: string, w: number) => {
 }
 
 /**
- * One MAGI panel as an array of lines, drawn with slanted shoulders.
+ * One MAGI panel, chamfered only on the edges that face the hub — the top seat
+ * narrows towards the bottom, the bottom seats are cut back at the top corner
+ * nearest the centre.
+ *
+ * A terminal cell cannot be half-filled, so each step of the chamfer would read
+ * as a staircase; the corner glyphs (◥◤◢◣) are drawn in the panel's own colour
+ * to fill the diagonal half of the boundary cell and soften it.
  *
  * Text handed to center() must stay free of escape sequences — the width
  * calculation counts characters, so an embedded colour code gets measured as
@@ -88,47 +97,69 @@ const pad = (s: string, w: number) => {
  */
 function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right'): string[] {
   const skin = SKIN[node?.state ?? 'idle']
-  const slant = Math.max(2, Math.round(w * 0.08))
+  const bg = paint(skin.bg, true)
+  const fg = paint(skin.fg)
+  const edge = paint(skin.bg) // panel colour as ink, for the corner glyphs
+  const step = Math.max(2, Math.round(w * 0.07))
 
-  const rows: { text: string; bold?: boolean }[] = [
+  // Content lives below the chamfer, so a label never lands in the cut corner.
+  const content: { text: string; bold?: boolean }[] = [
     { text: node?.label ?? '—', bold: true },
     { text: node?.model ?? '' },
     { text: skin.verdict, bold: true },
     { text: node?.note ?? '' },
   ]
+  const rows =
+    shape === 'top' ? [{ text: '' }, ...content, { text: '' }] : [{ text: '' }, { text: '' }, ...content]
 
-  const indents: [number, number][] =
+  // [left inset, right inset] per row, mirroring the web console's clip-paths.
+  const insets: [number, number][] =
     shape === 'top'
       ? [
           [0, 0],
           [0, 0],
-          [slant, slant],
-          [slant * 2, slant * 2],
+          [0, 0],
+          [0, 0],
+          [step, step],
+          [step * 2, step * 2],
         ]
       : shape === 'left'
         ? [
+            [0, step * 2],
+            [0, step],
             [0, 0],
             [0, 0],
             [0, 0],
-            [0, slant * 2],
+            [0, 0],
           ]
         : [
+            [step * 2, 0],
+            [step, 0],
             [0, 0],
             [0, 0],
             [0, 0],
-            [slant * 2, 0],
+            [0, 0],
           ]
 
   return rows.map((row, i) => {
-    const [l, r] = indents[i]
+    const [l, r] = insets[i]
+    const prev = insets[i - 1] ?? insets[i]
+
+    // Which way the edge is travelling decides which half of the cell is ink.
+    // A row whose inset has already reached zero has no cell to draw it in —
+    // putting one there would push the row a column wider than its neighbours.
+    const leftGlyph = l < 1 ? '' : l > prev[0] ? '◥' : l < prev[0] ? '◣' : ''
+    const rightGlyph = r < 1 ? '' : r > prev[1] ? '◤' : r < prev[1] ? '◢' : ''
+
+    const body =
+      bg + fg + (row.bold ? BOLD : '') + center(row.text, w - l - r) + RESET
+
     return (
-      ' '.repeat(l) +
-      skin.bg +
-      skin.fg +
-      (row.bold ? BOLD : '') +
-      center(row.text, w - l - r) +
-      RESET +
-      ' '.repeat(r)
+      ' '.repeat(Math.max(0, l - (leftGlyph ? 1 : 0))) +
+      (leftGlyph ? edge + leftGlyph + RESET : '') +
+      body +
+      (rightGlyph ? edge + rightGlyph + RESET : '') +
+      ' '.repeat(Math.max(0, r - (rightGlyph ? 1 : 0)))
     )
   })
 }
@@ -194,7 +225,7 @@ function render() {
   const bridge = linked(1, 2) && gap >= 5
   for (let i = 0; i < left.length; i++) {
     const spacer =
-      bridge && i === 2
+      bridge && i === 4
         ? ORANGE + '─'.repeat(Math.floor((gap - 1) / 2)) + '⇄' + '─'.repeat(Math.ceil((gap - 1) / 2)) + RESET
         : ' '.repeat(Math.max(0, gap))
     out.push(left[i] + spacer + right[i])
