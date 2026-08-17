@@ -78,8 +78,53 @@ nothing.
 | `POST /v1/chat/completions` | OpenAI-compatible, streaming and tools |
 | `GET /v1/models` | the three virtual models |
 | `GET /events` | live SSE feed of routing, proposals and scores |
+| `GET /api/models` | every model the runtimes have, and which are in the pool |
+| `POST /api/pool` | swap the pool; loads what is not resident and persists |
 | `GET /health` | pool availability |
 | `GET /` | the console |
+
+## Choosing the pool
+
+The **POOL** button lists everything LM Studio holds — resident or merely
+downloaded — and lets you pick the members, the primary and the aggregator.
+Applying loads anything that is not resident (`lms load` with an explicit
+context and no TTL, for the reasons in Gotchas), rebuilds the pool, and writes
+it back to `config.json`. Ids and MAGI seats are derived from the model names,
+so nothing has to be named by hand.
+
+The same thing from a terminal:
+
+```bash
+curl -s localhost:4141/api/models | jq '.models[] | {model, state, inPool}'
+curl -s localhost:4141/api/pool -X POST -H 'content-type: application/json' \
+  -d '{"members":[{"upstream":"lmstudio","model":"qwen/qwen3.8-27b"},
+                  {"upstream":"lmstudio","model":"google/gemma-4-31b"}],
+       "primary":"qwen/qwen3.8-27b"}'
+```
+
+## Debate
+
+The proposal round is blind on purpose — independent errors are what make
+selection worth anything. But on a turn with no score to appeal to, blindness
+is all downside, so text turns get a round of cross-examination: every model
+reads the others' answers and writes its own again. Only then does the
+aggregator synthesize.
+
+The console draws a bar in the gap between each pair that is actually talking.
+That is not always the whole pool: a proposer that failed, timed out, or
+returned nothing never enters the round, and with two members it is a
+two-way link.
+
+It costs a full extra fan-out per round — a design question measured 295 s for
+propose + one debate round on this machine, against ~110 s without. Turn it off
+or raise `rounds` in `config.json`:
+
+```json
+"debate": { "enabled": true, "rounds": 1, "maxPeerChars": 2000 }
+```
+
+Tool turns never debate. When a verifier can answer the question, an argument
+between models is a worse instrument than running the tests.
 
 In opencode (`~/.config/opencode/opencode.json` already has the provider):
 

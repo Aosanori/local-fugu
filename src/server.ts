@@ -1,7 +1,8 @@
 import { join } from 'node:path'
 import { emit, newTurn, replay, subscribe } from './bus.ts'
-import { config, member, probe, proposers } from './config.ts'
-import { consensus, judge, propose, synthesisRequest, verifiedSelect } from './fuse.ts'
+import { catalog, load } from './catalog.ts'
+import { config, member, probe, proposers, setPool } from './config.ts'
+import { consensus, debate, judge, propose, synthesisRequest, verifiedSelect } from './fuse.ts'
 import { modeOf, route } from './router.ts'
 import { jsonFromMessage, passthroughStream, sseFromMessage } from './sse.ts'
 import { complete, stream, type ChatRequest, type Message } from './upstream.ts'
@@ -207,9 +208,19 @@ async function handleChat(req: Request): Promise<Response> {
       : jsonFromMessage(winner.message, finish, virtual)
   }
 
-  // Text turn: synthesize one answer from the drafts.
+  // Text turn: nothing here can be scored, so this is where debate earns its
+  // keep — the models read each other before anything is synthesized.
+  let finalDrafts = drafts
+  const dcfg = config.debate
+  if (dcfg?.enabled && drafts.length >= 2) {
+    for (let round = 1; round <= dcfg.rounds; round++) {
+      finalDrafts = await debate(base, finalDrafts, { signal: req.signal, turn, round })
+      log({ route: 'fanout', debate: `round ${round}`, participants: finalDrafts.length })
+    }
+  }
+
   const agg = member(config.aggregator)
-  const synth = synthesisRequest(base, drafts)
+  const synth = synthesisRequest(base, finalDrafts)
   log({
     route: 'fanout',
     mode: 'synthesize',
@@ -220,7 +231,7 @@ async function handleChat(req: Request): Promise<Response> {
   emit({ type: 'node', turn, id: agg.id, state: 'thinking' })
 
   const finish = () => {
-    announce(turn, [...drafts.map((d) => d.member.id), agg.id], agg.id, 'contributed')
+    announce(turn, [...finalDrafts.map((d) => d.member.id), agg.id], agg.id, 'contributed')
     emit({
       type: 'decision',
       turn,
@@ -288,6 +299,77 @@ const server = Bun.serve({
       return new Response(body, {
         headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', ...CORS },
       })
+    }
+
+    if (pathname === '/api/models') {
+      const entries = await catalog()
+      return Response.json(
+        {
+          models: entries.map((e) => ({
+            ...e,
+            inPool: config.pool.some((m) => m.model === e.model && m.upstream === e.upstream),
+          })),
+          pool: config.pool.map((m) => ({
+            id: m.id,
+            label: m.label,
+            model: m.model,
+            upstream: m.upstream,
+            roles: m.roles,
+            available: !!m.available,
+          })),
+          primary: config.primary,
+          aggregator: config.aggregator,
+          contextLength: config.lmsContextLength ?? 65536,
+        },
+        { headers: CORS },
+      )
+    }
+
+    if (pathname === '/api/pool' && req.method === 'POST') {
+      try {
+        const body = (await req.json()) as {
+          members: { upstream: string; model: string }[]
+          primary?: string
+          aggregator?: string
+          load?: boolean
+        }
+
+        // Anything picked but not resident has to be loaded first, or probe()
+        // will simply drop it.
+        const warnings: string[] = []
+        if (body.load !== false) {
+          const resident = new Set(
+            (await catalog()).filter((e) => e.state === 'loaded').map((e) => e.model),
+          )
+          for (const m of body.members) {
+            if (resident.has(m.model)) continue
+            try {
+              log({ loading: m.model })
+              await load(m.model, config.lmsContextLength ?? 65536)
+            } catch (e) {
+              warnings.push((e as Error).message)
+            }
+          }
+        }
+
+        await setPool(body.members, body.primary, body.aggregator)
+        emit({ type: 'hello', nodes: nodes() })
+        log({ pool: config.pool.map((m) => m.id).join(','), primary: config.primary })
+
+        return Response.json(
+          {
+            ok: true,
+            warnings,
+            pool: config.pool.map((m) => ({ id: m.id, model: m.model, available: !!m.available })),
+          },
+          { headers: CORS },
+        )
+      } catch (e) {
+        return Response.json(
+          { ok: false, error: (e as Error).message },
+          { status: 400, headers: CORS },
+        )
+      }
     }
 
     if (pathname === '/health') {

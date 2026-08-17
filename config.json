@@ -14,18 +14,18 @@
   },
   "pool": [
     {
-      "id": "qwen",
+      "id": "qwen3.8-27b",
       "upstream": "lmstudio",
       "model": "qwen/qwen3.8-27b",
       "roles": [
         "proposer",
-        "aggregator",
-        "primary"
+        "primary",
+        "aggregator"
       ],
       "label": "MELCHIOR·1"
     },
     {
-      "id": "gemma",
+      "id": "gemma-4-31b",
       "upstream": "lmstudio",
       "model": "google/gemma-4-31b",
       "roles": [
@@ -34,28 +34,17 @@
       "label": "BALTHASAR·2"
     },
     {
-      "id": "muse",
+      "id": "muse-glimmer",
       "upstream": "lmstudio",
       "model": "meta/muse-glimmer",
       "roles": [
         "proposer"
       ],
       "label": "CASPER·3"
-    },
-    {
-      "id": "qwen36",
-      "upstream": "ollama",
-      "model": "qwen3.6:35b-mlx",
-      "roles": [
-        "proposer"
-      ],
-      "optional": true,
-      "enabled": false,
-      "label": "CASPER·4"
     }
   ],
-  "primary": "qwen",
-  "aggregator": "qwen",
+  "primary": "qwen3.8-27b",
+  "aggregator": "qwen3.8-27b",
   "verify": {
     "enabled": true,
     "editTools": [
@@ -102,5 +91,11 @@
     "proposerTimeoutMs": 180000,
     "minProposers": 2,
     "reasoningHeadroom": 2048
+  },
+  "lmsContextLength": 65536,
+  "debate": {
+    "enabled": true,
+    "rounds": 1,
+    "maxPeerChars": 2000
   }
 }

@@ -30,6 +30,34 @@
   .frame { max-width: 1080px; margin: 0 auto; }
 
   .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .btn {
+    margin-left: auto; background: transparent; border: 1px solid var(--orange);
+    color: var(--orange); font: inherit; font-size: 11px; letter-spacing: .18em;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .btn:hover { background: var(--orange); color: #100c05; }
+
+  .sheet {
+    display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .82);
+    z-index: 10; padding: 24px; overflow-y: auto;
+  }
+  .sheet.open { display: block; }
+  .sheet .inner {
+    max-width: 640px; margin: 0 auto; border: 1px solid var(--orange);
+    background: #050505; padding: 18px;
+  }
+  .sheet h2 { margin: 0 0 12px; font-size: 20px; letter-spacing: .2em; color: var(--orange); }
+  .mrow {
+    display: grid; grid-template-columns: 22px 1fr auto auto auto; gap: 10px;
+    align-items: center; padding: 7px 0; border-bottom: 1px solid #1e1a15;
+    font-size: 12px; color: #cfcfcf;
+  }
+  .mrow .id { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+  .mrow .badge { font-size: 10px; letter-spacing: .1em; color: #7d6244; }
+  .mrow .badge.loaded { color: var(--teal); }
+  .mrow label { font-size: 10px; letter-spacing: .1em; color: #8d6a3f; cursor: pointer; }
+  .sheet .actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+  .sheet .msg { font-size: 11px; color: #8d6a3f; }
   .tag {
     background: #b9b9b9; color: #111; font-weight: 700; letter-spacing: .18em;
     padding: 3px 12px; font-size: 13px;
@@ -71,9 +99,10 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     padding: 14px; transition: background .25s, color .25s, box-shadow .25s;
   }
-  .slot-top .node { clip-path: polygon(0 0, 100% 0, 82% 100%, 18% 100%); }
-  .left  .node { clip-path: polygon(0 0, 100% 0, 100% 78%, 84% 100%, 0 100%); margin-left: auto; }
-  .right .node { clip-path: polygon(0 0, 100% 0, 100% 100%, 16% 100%, 0 78%); }
+  /* Shoulders are square; only the edges that face the hub are chamfered. */
+  .slot-top .node { clip-path: polygon(0 0, 100% 0, 100% 56%, 84% 100%, 16% 100%, 0 56%); }
+  .left  .node { clip-path: polygon(0 0, 74% 0, 100% 36%, 100% 100%, 0 100%); margin-left: auto; }
+  .right .node { clip-path: polygon(26% 0, 100% 0, 100% 100%, 0 100%, 0 36%); }
   .left { display: flex; }
   .right { display: flex; }
 
@@ -90,6 +119,16 @@
   .model { font-size: 10px; letter-spacing: .06em; opacity: .78; margin-top: 3px; }
   .verdict { font-size: 15px; font-weight: 700; letter-spacing: .16em; margin-top: 8px; min-height: 20px; }
   .score { font-size: 10px; letter-spacing: .04em; opacity: .85; margin-top: 2px; font-family: ui-monospace, monospace; }
+
+  .node.debating { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 2px var(--orange); }
+
+  /* Debate links live in the gaps between panels, never across them. */
+  #links { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+  #links line {
+    stroke: var(--orange); stroke-width: 11; stroke-linecap: butt;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { stroke: var(--orange-bright); } }
 
   .hub {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -120,6 +159,19 @@
   <div class="topbar">
     <div class="tag">FRONT</div>
     <div class="endpoint">OPENAI-COMPATIBLE ENDPOINT <b id="endpoint">—</b></div>
+    <button class="btn" id="poolBtn">POOL</button>
+  </div>
+
+  <div class="sheet" id="sheet">
+    <div class="inner">
+      <h2>構成選択</h2>
+      <div id="mlist"></div>
+      <div class="actions">
+        <button class="btn" id="apply" style="margin-left:0">APPLY</button>
+        <button class="btn" id="cancel" style="margin-left:0">CANCEL</button>
+        <span class="msg" id="msg"></span>
+      </div>
+    </div>
   </div>
 
   <div class="headrow">
@@ -161,6 +213,7 @@
         <div class="verdict"></div><div class="score"></div>
       </div>
     </div>
+    <svg id="links"></svg>
     <div class="hub">MAGI</div>
   </div>
 
@@ -186,6 +239,7 @@
 
   const VERDICT = {
     thinking: '審議中',
+    debating: '討議中',
     answered: '回答',
     winner: '可決',
     contributed: '参考',
@@ -236,6 +290,69 @@
     }
   }
 
+  /**
+   * Walk from a panel's centre toward another until the ray leaves that
+   * panel's box: the exit point is where the gap starts.
+   */
+  function exitPoint(rect, from, to) {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const tx = dx === 0 ? Infinity : (dx > 0 ? rect.right - from.x : rect.left - from.x) / dx
+    const ty = dy === 0 ? Infinity : (dy > 0 ? rect.bottom - from.y : rect.top - from.y) / dy
+    const t = Math.min(tx, ty)
+    return { x: from.x + dx * t, y: from.y + dy * t }
+  }
+
+  /**
+   * One bar per debating pair, drawn only in the gap between their frames —
+   * the panels themselves stay uncovered.
+   */
+  function drawLinks(ids) {
+    const svg = $('links')
+    svg.innerHTML = ''
+    if (!ids || ids.length < 2) return
+
+    const frame = svg.parentElement.getBoundingClientRect()
+    const local = (r) => ({
+      left: r.left - frame.left,
+      right: r.right - frame.left,
+      top: r.top - frame.top,
+      bottom: r.bottom - frame.top,
+      cx: r.left - frame.left + r.width / 2,
+      cy: r.top - frame.top + r.height / 2,
+    })
+
+    const boxes = ids
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((el) => local(el.getBoundingClientRect()))
+
+    const ns = 'http://www.w3.org/2000/svg'
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]
+        const b = boxes[j]
+        const ca = { x: a.cx, y: a.cy }
+        const cb = { x: b.cx, y: b.cy }
+        const p = exitPoint(a, ca, cb)
+        const q = exitPoint(b, cb, ca)
+
+        // Panels that touch leave no gap to draw in.
+        if (Math.hypot(q.x - p.x, q.y - p.y) < 4) continue
+
+        const line = document.createElementNS(ns, 'line')
+        line.setAttribute('x1', p.x)
+        line.setAttribute('y1', p.y)
+        line.setAttribute('x2', q.x)
+        line.setAttribute('y2', q.y)
+        svg.append(line)
+      }
+    }
+  }
+
+  let debating = null
+  addEventListener('resize', () => drawLinks(debating))
+
   function logLine(html, cls) {
     const el = document.createElement('div')
     if (cls) el.className = cls
@@ -259,6 +376,8 @@
     if (e.type === 'turn') {
       activeTurn = e.turn
       activeSince = Date.now()
+      debating = null
+      drawLinks(null)
       resetNodes()
       setBusy(true)
       $('code').textContent = e.turn.toUpperCase()
@@ -282,6 +401,14 @@
       return
     }
 
+    if (e.type === 'debate') {
+      debating = e.participants
+      drawLinks(debating)
+      $('decision').textContent = `討議 round ${e.round}`
+      logLine(`<b>${e.turn}</b> debate round ${e.round} — ${e.participants.join(' ⇄ ')}`)
+      return
+    }
+
     if (e.type === 'verify') {
       $('baseline').textContent = e.baseline
       $('best').textContent = e.best + (e.regression ? ' (REGRESSION)' : '')
@@ -295,6 +422,8 @@
 
     if (e.type === 'decision') {
       activeTurn = null
+      debating = null
+      drawLinks(null)
       setBusy(false)
       // Anyone still lit when the verdict lands did not make it into the
       // decision — a slow proposer, or one whose draft carried no tool call.
@@ -308,6 +437,66 @@
       $('elapsed').textContent = (e.ms / 1000).toFixed(1) + 's'
       logLine(`<b>${e.turn}</b> ${e.mode} winner=${e.winner ?? '-'} ${e.call ?? ''} ${(e.ms / 1000).toFixed(1)}s`)
     }
+  }
+
+  // ---- pool picker -------------------------------------------------------
+  const sheet = $('sheet')
+
+  async function openPool() {
+    sheet.classList.add('open')
+    $('msg').textContent = 'loading…'
+    const data = await (await fetch('/api/models', { cache: 'no-store' })).json()
+    $('msg').textContent = ''
+
+    $('mlist').innerHTML = ''
+    for (const m of data.models) {
+      const row = document.createElement('div')
+      row.className = 'mrow'
+      const ctx = m.maxContext ? `ctx ${Math.round(m.maxContext / 1024)}k` : ''
+      row.innerHTML = `
+        <input type="checkbox" data-model="${m.model}" data-upstream="${m.upstream}" ${m.inPool ? 'checked' : ''} />
+        <span class="id">${m.model}<br /><span class="badge">${m.arch ?? ''} ${ctx}</span></span>
+        <span class="badge ${m.state === 'loaded' ? 'loaded' : ''}">${m.state === 'loaded' ? 'LOADED' : 'ON DISK'}</span>
+        <label><input type="radio" name="primary" value="${m.model}" ${data.pool.find((p) => p.id === data.primary)?.model === m.model ? 'checked' : ''} /> PRIMARY</label>
+        <label><input type="radio" name="aggregator" value="${m.model}" ${data.pool.find((p) => p.id === data.aggregator)?.model === m.model ? 'checked' : ''} /> AGG</label>`
+      $('mlist').append(row)
+    }
+  }
+
+  const closePool = () => sheet.classList.remove('open')
+
+  $('poolBtn').onclick = openPool
+  $('cancel').onclick = closePool
+  // The sheet covers the whole viewport, so without these it is a trap: the
+  // POOL button underneath is unreachable and the list can never be refreshed.
+  sheet.onclick = (e) => {
+    if (e.target === sheet) closePool()
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePool()
+  })
+
+  $('apply').onclick = async () => {
+    const members = [...document.querySelectorAll('#mlist input[type=checkbox]:checked')].map((c) => ({
+      model: c.dataset.model,
+      upstream: c.dataset.upstream,
+    }))
+    if (!members.length) return ($('msg').textContent = 'select at least one model')
+
+    $('msg').textContent = 'applying… (unloaded models are loaded first, this can take a minute)'
+    const res = await fetch('/api/pool', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        members,
+        primary: document.querySelector('input[name=primary]:checked')?.value,
+        aggregator: document.querySelector('input[name=aggregator]:checked')?.value,
+      }),
+    })
+    const body = await res.json()
+    if (!body.ok) return ($('msg').textContent = body.error)
+    $('msg').textContent = body.warnings?.length ? body.warnings.join(' / ') : ''
+    if (!body.warnings?.length) sheet.classList.remove('open')
   }
 
   function connect() {

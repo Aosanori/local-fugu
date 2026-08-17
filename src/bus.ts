@@ -11,11 +11,14 @@ export type Event =
       regression: boolean
       scores: { id: string; total: number; detail: string }[]
     }
+  | { type: 'debate'; turn: string; round: number; participants: string[] }
   | { type: 'decision'; turn: string; mode: string; winner?: string; call?: string; ms: number }
 
 export type NodeState =
   | 'idle'
   | 'thinking'
+  /** reading the other models' answers and revising its own */
+  | 'debating'
   | 'answered'
   | 'winner'
   /** its draft fed the synthesis rather than being returned outright */

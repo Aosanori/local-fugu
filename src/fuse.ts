@@ -148,6 +148,70 @@ export async function judge(
   return candidates[0]
 }
 
+/**
+ * One round of cross-examination.
+ *
+ * The proposal round is deliberately blind — that is where the diversity comes
+ * from. This is the opposite: every model reads what the others produced and
+ * answers again. It only pays off on turns no scorer can settle (design calls,
+ * trade-offs), and it costs a full extra fan-out per round, which is why the
+ * verifiable paths never run it.
+ */
+export async function debate(
+  req: ChatRequest,
+  drafts: Proposal[],
+  opts: { signal?: AbortSignal; turn?: string; round: number },
+): Promise<Proposal[]> {
+  const { signal, turn = '', round } = opts
+  const limit = config.debate?.maxPeerChars ?? 2000
+
+  emit({ type: 'debate', turn, round, participants: drafts.map((d) => d.member.id) })
+
+  const settled = await Promise.allSettled(
+    drafts.map(async (own): Promise<Proposal> => {
+      const peers = drafts.filter((d) => d.member.id !== own.member.id)
+      if (peers.length === 0) return own
+
+      emit({ type: 'node', turn, id: own.member.id, state: 'debating' })
+      const started = Date.now()
+
+      const transcript = peers
+        .map((p) => `<peer id="${p.member.label ?? p.member.id}">\n${(p.message.content ?? '').slice(0, limit)}\n</peer>`)
+        .join('\n\n')
+
+      const { message, finish_reason } = await complete(
+        own.member,
+        {
+          ...req,
+          max_tokens: Math.max(req.max_tokens ?? 0, config.router.proposerMaxTokens),
+          messages: [
+            ...req.messages,
+            {
+              role: 'user',
+              content: `Other models answered this independently. Read them, then answer again yourself.\n\n${transcript}\n\n<your-previous-answer>\n${(own.message.content ?? '').slice(0, limit)}\n</your-previous-answer>\n\nWhere a peer is right and you were wrong, change your position. Where a peer is wrong about something that matters, correct it plainly instead of hedging. Where you already had it right, keep it and do not pad. Output only your improved answer — no commentary about the peers, this instruction, or the fact that you revised.`,
+            },
+          ],
+        },
+        { timeoutMs: config.router.proposerTimeoutMs, signal },
+      )
+
+      const ms = Date.now() - started
+      emit({
+        type: 'node',
+        turn,
+        id: own.member.id,
+        state: 'answered',
+        ms,
+        note: `round ${round} · ${(message.content ?? '').length} chars`,
+      })
+      return { member: own.member, message, finish_reason, ms }
+    }),
+  )
+
+  // A model that failed to revise keeps the answer it already gave.
+  return settled.map((s, i) => (s.status === 'fulfilled' ? s.value : drafts[i]))
+}
+
 export type VerifyOutcome = {
   winner: Proposal
   baseline: number

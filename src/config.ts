@@ -22,6 +22,9 @@ export type Config = {
   pool: PoolMember[]
   primary: string
   aggregator: string
+  /** context length used when the gateway loads a model into LM Studio */
+  lmsContextLength?: number
+  debate?: { enabled: boolean; rounds: number; maxPeerChars: number }
   router: {
     trivialChars: number
     fanoutOnContinuation: boolean
@@ -34,9 +37,65 @@ export type Config = {
   }
 }
 
-const path = process.env.FUGU_CONFIG ?? new URL('../config.json', import.meta.url).pathname
+export const configPath = process.env.FUGU_CONFIG ?? new URL('../config.json', import.meta.url).pathname
 
-export const config: Config = JSON.parse(await Bun.file(path).text())
+export const config: Config = JSON.parse(await Bun.file(configPath).text())
+
+/** MAGI seats, in the order members are added. */
+const SEATS = ['MELCHIOR·1', 'BALTHASAR·2', 'CASPER·3']
+
+const slug = (model: string) =>
+  (model.split('/').pop() ?? model).replace(/[^a-zA-Z0-9._-]/g, '-').toLowerCase()
+
+/**
+ * Replace the pool with an explicit selection and persist it. Ids and MAGI
+ * seats are derived here so a caller only has to name models.
+ */
+export async function setPool(
+  selection: { upstream: string; model: string }[],
+  primaryModel?: string,
+  aggregatorModel?: string,
+): Promise<void> {
+  if (selection.length === 0) throw new Error('pool cannot be empty')
+
+  const used = new Set<string>()
+  const pool: PoolMember[] = selection.map((s, i) => {
+    let id = slug(s.model)
+    while (used.has(id)) id += `-${i}`
+    used.add(id)
+    return {
+      id,
+      upstream: s.upstream,
+      model: s.model,
+      roles: ['proposer'],
+      label: SEATS[i] ?? `NODE·${i + 1}`,
+    }
+  })
+
+  const pick = (model: string | undefined) =>
+    pool.find((m) => m.model === model) ?? pool[0]
+
+  const primary = pick(primaryModel)
+  const aggregator = pick(aggregatorModel)
+  primary.roles.push('primary')
+  if (!aggregator.roles.includes('aggregator')) aggregator.roles.push('aggregator')
+
+  config.pool = pool
+  config.primary = primary.id
+  config.aggregator = aggregator.id
+
+  await save()
+  await probe()
+}
+
+/** Write the config back out without the fields probe() fills in at runtime. */
+async function save(): Promise<void> {
+  const clean = {
+    ...config,
+    pool: config.pool.map(({ available, ...rest }) => rest),
+  }
+  await Bun.write(configPath, JSON.stringify(clean, null, 2) + '\n')
+}
 
 export const member = (id: string): PoolMember => {
   const m = config.pool.find((p) => p.id === id)

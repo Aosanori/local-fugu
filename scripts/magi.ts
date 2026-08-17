@@ -16,11 +16,20 @@ const TEAL = rgb(76, 143, 125)
 const GREY = rgb(120, 120, 120)
 const DIMTEXT = rgb(90, 90, 90)
 
-type NodeState = 'idle' | 'thinking' | 'answered' | 'winner' | 'rejected' | 'contributed' | 'error'
+type NodeState =
+  | 'idle'
+  | 'thinking'
+  | 'debating'
+  | 'answered'
+  | 'winner'
+  | 'rejected'
+  | 'contributed'
+  | 'error'
 
 const SKIN: Record<NodeState, { bg: string; fg: string; verdict: string }> = {
   idle: { bg: rgb(38, 50, 66, true), fg: rgb(150, 168, 190), verdict: '' },
   thinking: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '審議中' },
+  debating: { bg: rgb(122, 152, 186, true), fg: rgb(10, 10, 10), verdict: '討議中' },
   answered: { bg: rgb(91, 127, 166, true), fg: rgb(10, 10, 10), verdict: '回答' },
   winner: { bg: rgb(217, 131, 36, true), fg: rgb(16, 12, 5), verdict: '可決' },
   contributed: { bg: rgb(60, 84, 110, true), fg: rgb(200, 214, 230), verdict: '参考' },
@@ -41,6 +50,7 @@ const state = {
   baseline: '-' as string | number,
   best: '-' as string | number,
   elapsed: '-',
+  debating: null as string[] | null,
   log: [] as string[],
 }
 
@@ -166,11 +176,29 @@ function render() {
   for (const line of panel(slots[0], topW, 'top')) {
     out.push(' '.repeat(Math.floor((cols - topW) / 2)) + line)
   }
-  out.push(' '.repeat(Math.floor((cols - 7) / 2)) + ORANGE + BOLD + 'M A G I' + RESET)
+  // Debate links sit in the gaps between frames, and only between the seats
+  // that are actually talking — a proposer that dropped out is not linked.
+  const talking = new Set(state.debating ?? [])
+  const linked = (a: number, b: number) =>
+    !!slots[a] && !!slots[b] && talking.has(slots[a]!.id) && talking.has(slots[b]!.id)
+
+  const hub = Array.from({ length: cols }, () => ' ')
+  const put = (text: string, at: number) => [...text].forEach((ch, i) => (hub[at + i] = ch))
+  put('M A G I', Math.floor((cols - 7) / 2))
+  if (linked(0, 1)) put('╱', Math.floor(cols / 2) - 13)
+  if (linked(0, 2)) put('╲', Math.floor(cols / 2) + 13)
+  out.push(ORANGE + BOLD + hub.join('').trimEnd() + RESET)
 
   const left = panel(slots[1], sideW, 'left')
   const right = panel(slots[2], sideW, 'right')
-  for (let i = 0; i < left.length; i++) out.push(left[i] + ' '.repeat(Math.max(0, gap)) + right[i])
+  const bridge = linked(1, 2) && gap >= 5
+  for (let i = 0; i < left.length; i++) {
+    const spacer =
+      bridge && i === 2
+        ? ORANGE + '─'.repeat(Math.floor((gap - 1) / 2)) + '⇄' + '─'.repeat(Math.ceil((gap - 1) / 2)) + RESET
+        : ' '.repeat(Math.max(0, gap))
+    out.push(left[i] + spacer + right[i])
+  }
 
   out.push('')
   out.push(`${DIMTEXT}DECISION ${RESET}${state.decision}   ${DIMTEXT}BASELINE ${RESET}${state.baseline}   ${DIMTEXT}BEST ${RESET}${state.best}   ${DIMTEXT}ELAPSED ${RESET}${state.elapsed}`)
@@ -191,6 +219,7 @@ function handle(e: any) {
     state.prompt = e.prompt || '— 継続審議 —'
     state.busy = true
     state.since = Date.now()
+    state.debating = null
     state.decision = '-'
     state.baseline = '-'
     state.best = '-'
@@ -205,6 +234,10 @@ function handle(e: any) {
       n.state = e.state
       if (e.note) n.note = e.note + (e.ms ? ` · ${(e.ms / 1000).toFixed(1)}s` : '')
     }
+  } else if (e.type === 'debate') {
+    state.debating = e.participants
+    state.decision = `討議 round ${e.round}`
+    state.log.unshift(`${e.turn} debate round ${e.round} — ${e.participants.join(' ⇄ ')}`)
   } else if (e.type === 'verify') {
     state.baseline = e.baseline
     state.best = `${e.best}${e.regression ? ' REGRESSION' : ''}`
@@ -215,6 +248,7 @@ function handle(e: any) {
     state.log.unshift(`verify baseline=${e.baseline} best=${e.best}`)
   } else if (e.type === 'decision') {
     state.busy = false
+    state.debating = null
     // Anyone still lit when the verdict lands did not make it into the
     // decision — a slow proposer, or one whose draft carried no tool call.
     for (const n of state.nodes) {
