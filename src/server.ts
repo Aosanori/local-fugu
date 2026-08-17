@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { emit, newTurn, replay, subscribe } from './bus.ts'
 import { catalog, load, unload } from './catalog.ts'
 import { config, member, probe, proposers, setPool } from './config.ts'
-import { consensus, debate, judge, propose, synthesisRequest, verifiedSelect } from './fuse.ts'
+import { consensus, debate, judge, propose, synthesisRequest, turnTimeoutMs, verifiedSelect } from './fuse.ts'
 import { modeOf, route } from './router.ts'
 import { jsonFromMessage, sseKeepAlive, type Turn } from './sse.ts'
 import { complete, stream, type ChatRequest, type Message } from './upstream.ts'
@@ -57,6 +57,14 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   // Strip our virtual id; each upstream call sets its own real model.
   const base: ChatRequest = { ...body, model: '' }
 
+  // propose() reports its own failures per seat; these are for the calls made
+  // directly — primary and aggregator — which used to fail invisibly, leaving
+  // the console deliberating forever.
+  const fail = (id: string, e: Error) => {
+    emit({ type: 'node', turn, id, state: 'error', note: e.message.slice(0, 80) })
+    emit({ type: 'decision', turn, mode: 'error', winner: id, ms: Date.now() - started })
+  }
+
   const single = async (
     m: ReturnType<typeof member>,
     request: ChatRequest,
@@ -67,12 +75,20 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
       emit({ type: 'node', turn, id: m.id, state: 'winner' })
       emit({ type: 'decision', turn, mode: label, winner: m.id, ms: Date.now() - started })
     }
-    if (wantsStream) {
-      return { pipe: await stream(m, request, { signal: req.signal }), onEnd: settle }
+    try {
+      if (wantsStream) {
+        return { pipe: await stream(m, request, { signal: req.signal }), onEnd: settle }
+      }
+      const { message, finish_reason } = await complete(m, request, {
+        signal: req.signal,
+        timeoutMs: turnTimeoutMs(request),
+      })
+      settle()
+      return { message, finish: finish_reason }
+    } catch (e) {
+      fail(m.id, e as Error)
+      throw e
     }
-    const { message, finish_reason } = await complete(m, request, { signal: req.signal })
-    settle()
-    return { message, finish: finish_reason }
   }
 
   if (decision.kind === 'passthrough') {
@@ -84,7 +100,13 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   if (decision.kind === 'speculative') {
     const m = member(config.primary)
     emit({ type: 'node', turn, id: m.id, state: 'thinking' })
-    const first = await complete(m, base, { signal: req.signal })
+    let first
+    try {
+      first = await complete(m, base, { signal: req.signal, timeoutMs: turnTimeoutMs(base) })
+    } catch (e) {
+      fail(m.id, e as Error)
+      throw e
+    }
     const call = first.message.tool_calls?.[0]
     const isEdit = !!call && (verifyConfig()?.editTools.includes(call.function.name) ?? false)
     emit({
@@ -239,12 +261,20 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
     })
   }
 
-  if (wantsStream) {
-    return { pipe: await stream(agg, synth, { signal: req.signal }), onEnd: finish }
+  try {
+    if (wantsStream) {
+      return { pipe: await stream(agg, synth, { signal: req.signal }), onEnd: finish }
+    }
+    const { message, finish_reason } = await complete(agg, synth, {
+      signal: req.signal,
+      timeoutMs: turnTimeoutMs(synth),
+    })
+    finish()
+    return { message, finish: finish_reason }
+  } catch (e) {
+    fail(agg.id, e as Error)
+    throw e
   }
-  const { message, finish_reason } = await complete(agg, synth, { signal: req.signal })
-  finish()
-  return { message, finish: finish_reason }
 }
 
 /**
@@ -298,13 +328,27 @@ const server = Bun.serve({
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`))
           send({ type: 'hello', nodes: nodes() })
           for (const e of replay()) send(e)
-          unsubscribe = subscribe((e) => {
+          // A quiet gateway outlasts Bun's 255 s idle cap, and a feed with
+          // nothing to say was being torn down as idle. Comment lines are
+          // ignored by every SSE client and keep the connection warm.
+          const beat = setInterval(() => {
+            try {
+              controller.enqueue(encoder.encode(': hb\n\n'))
+            } catch {
+              unsubscribe()
+            }
+          }, 15000)
+          const stop = subscribe((e) => {
             try {
               send(e)
             } catch {
               unsubscribe()
             }
           })
+          unsubscribe = () => {
+            clearInterval(beat)
+            stop()
+          }
         },
         cancel() {
           unsubscribe()

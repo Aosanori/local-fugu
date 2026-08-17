@@ -93,7 +93,8 @@
     "proposerMaxTokens": 2048,
     "proposerTimeoutMs": 600000,
     "minProposers": 2,
-    "reasoningHeadroom": 2048
+    "reasoningHeadroom": 2048,
+    "timeoutPerCharMs": 2
   },
   "lmsContextLength": 65536,
   "debate": {

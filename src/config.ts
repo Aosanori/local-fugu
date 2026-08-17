@@ -35,6 +35,8 @@ export type Config = {
     /** extra tokens so a reasoning model can think and still answer */
     reasoningHeadroom: number
     proposerTimeoutMs: number
+    /** extra timeout per prompt character, so long contexts get longer ceilings */
+    timeoutPerCharMs?: number
     minProposers: number
   }
 }

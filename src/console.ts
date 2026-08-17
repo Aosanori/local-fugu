@@ -291,8 +291,12 @@ function handle(e: any) {
     state.debating = null
     // Anyone still lit when the verdict lands did not make it into the
     // decision — a slow proposer, or one whose draft carried no tool call.
+    // When the turn itself died, the lit seats died with it: settle them red.
+    const settleAs: NodeState = e.mode === 'error' ? 'error' : 'rejected'
     for (const n of state.nodes) {
-      if (n.state === 'thinking' || n.state === 'answered') n.state = 'rejected'
+      if (n.state === 'thinking' || n.state === 'answered' || n.state === 'debating') {
+        n.state = settleAs
+      }
     }
     state.decision = `${e.mode} → ${e.winner ?? '-'}${e.call ? ' / ' + e.call : ''}`
     state.elapsed = `${(e.ms / 1000).toFixed(1)}s`

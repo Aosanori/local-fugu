@@ -459,10 +459,12 @@
       setBusy(false)
       // Anyone still lit when the verdict lands did not make it into the
       // decision — a slow proposer, or one whose draft carried no tool call.
+      // When the turn itself died, the lit seats died with it: settle them red.
+      const settleAs = e.mode === 'error' ? 'error' : 'rejected'
       for (const el of byId.values()) {
-        if (el.classList.contains('thinking') || el.classList.contains('answered')) {
-          el.className = 'node rejected'
-          el.querySelector('.verdict').textContent = VERDICT.rejected
+        if (['thinking', 'answered', 'debating'].some((c) => el.classList.contains(c))) {
+          el.className = 'node ' + settleAs
+          el.querySelector('.verdict').textContent = VERDICT[settleAs]
         }
       }
       $('decision').textContent = `${e.mode} → ${e.winner ?? '-'}${e.call ? ' / ' + e.call : ''}`

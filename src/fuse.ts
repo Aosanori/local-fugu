@@ -21,6 +21,20 @@ export type Proposal = {
 
 const DRAFT_LIMIT = 4000
 
+/**
+ * Prompt-size-aware ceiling. A fixed timeout that fits a short prompt is a
+ * death sentence for a long one — prefill on tens of thousands of tokens can
+ * take longer than the whole base allowance — so the ceiling grows with the
+ * conversation being sent.
+ */
+export const turnTimeoutMs = (req: ChatRequest): number => {
+  const chars = req.messages.reduce(
+    (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+    0,
+  )
+  return config.router.proposerTimeoutMs + chars * (config.router.timeoutPerCharMs ?? 2)
+}
+
 /** Fan out the same turn to every available proposer, in parallel. */
 export async function propose(
   req: ChatRequest,
@@ -42,7 +56,7 @@ export async function propose(
           ...req,
           max_tokens: Math.max(req.max_tokens ?? 0, config.router.proposerMaxTokens),
         },
-        { timeoutMs: config.router.proposerTimeoutMs, signal },
+        { timeoutMs: turnTimeoutMs(req), signal },
       )
       const ms = Date.now() - started
       emit({
@@ -139,7 +153,7 @@ export async function judge(
         max_tokens: config.router.reasoningHeadroom + 64,
         temperature: 0,
       },
-      { timeoutMs: config.router.proposerTimeoutMs, signal },
+      { timeoutMs: turnTimeoutMs(req), signal },
     )
     const digits = String(message.content ?? '').match(/\d+/g)
     const pick = Number(digits?.[digits.length - 1])
@@ -195,7 +209,7 @@ export async function debate(
             },
           ],
         },
-        { timeoutMs: config.router.proposerTimeoutMs, signal },
+        { timeoutMs: turnTimeoutMs(req), signal },
       )
 
       const ms = Date.now() - started
