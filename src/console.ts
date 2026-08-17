@@ -303,9 +303,14 @@ function handle(e: any) {
 }
 
 async function follow() {
+  // `magi` starts the console before the gateway it hosts is listening, so the
+  // first attempt is expected to fail — only report losing a feed we had.
+  let everConnected = false
+
   for (;;) {
     try {
       const res = await fetch(`${BASE}/events`)
+      everConnected = true
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -321,10 +326,12 @@ async function follow() {
         }
       }
     } catch {
-      state.log.unshift(`disconnected — retrying`)
-      render()
+      if (everConnected) {
+        state.log.unshift(`disconnected — retrying`)
+        render()
+      }
     }
-    await new Promise((r) => setTimeout(r, 2000))
+    await new Promise((r) => setTimeout(r, everConnected ? 2000 : 400))
   }
 }
 
