@@ -3,9 +3,9 @@
  * MAGI console for the terminal. Same event feed as the web console.
  *
  *   ./scripts/magi.ts            # follows http://localhost:4141
- *   FUGU_URL=... ./scripts/magi.ts
+ *   MAGI_URL=... ./scripts/magi.ts
  */
-const BASE = process.env.FUGU_URL ?? 'http://localhost:4141'
+const BASE = process.env.MAGI_URL ?? 'http://localhost:4141'
 
 const rgb = (r: number, g: number, b: number, bg = false) => `\x1b[${bg ? 48 : 38};2;${r};${g};${b}m`
 const RESET = '\x1b[0m'
@@ -143,24 +143,8 @@ function panel(node: Node | undefined, w: number, shape: 'top' | 'left' | 'right
 
   return rows.map((row, i) => {
     const [l, r] = insets[i]
-    const prev = insets[i - 1] ?? insets[i]
-
-    // Which way the edge is travelling decides which half of the cell is ink.
-    // A row whose inset has already reached zero has no cell to draw it in —
-    // putting one there would push the row a column wider than its neighbours.
-    const leftGlyph = l < 1 ? '' : l > prev[0] ? '◥' : l < prev[0] ? '◣' : ''
-    const rightGlyph = r < 1 ? '' : r > prev[1] ? '◤' : r < prev[1] ? '◢' : ''
-
-    const body =
-      bg + fg + (row.bold ? BOLD : '') + center(row.text, w - l - r) + RESET
-
-    return (
-      ' '.repeat(Math.max(0, l - (leftGlyph ? 1 : 0))) +
-      (leftGlyph ? edge + leftGlyph + RESET : '') +
-      body +
-      (rightGlyph ? edge + rightGlyph + RESET : '') +
-      ' '.repeat(Math.max(0, r - (rightGlyph ? 1 : 0)))
-    )
+    const body = bg + fg + (row.bold ? BOLD : '') + center(row.text, w - l - r) + RESET
+    return ' '.repeat(l) + body + ' '.repeat(r)
   })
 }
 

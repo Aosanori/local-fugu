@@ -57,7 +57,7 @@ export async function propose(
 
   settled.forEach((s, i) => {
     if (s.status === 'rejected') {
-      console.warn(`[fugu] proposer ${pool[i].id} failed: ${s.reason}`)
+      console.warn(`[magi] proposer ${pool[i].id} failed: ${s.reason}`)
       emit({ type: 'node', turn, id: pool[i].id, state: 'error', note: String(s.reason).slice(0, 80) })
     }
   })
@@ -142,7 +142,7 @@ export async function judge(
     const pick = Number(digits?.[digits.length - 1])
     if (Number.isInteger(pick) && candidates[pick]) return candidates[pick]
   } catch (e) {
-    console.warn(`[fugu] judge failed, falling back to first candidate: ${(e as Error).message}`)
+    console.warn(`[magi] judge failed, falling back to first candidate: ${(e as Error).message}`)
   }
 
   return candidates[0]

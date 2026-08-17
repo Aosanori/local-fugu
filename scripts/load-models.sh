@@ -10,7 +10,7 @@
 set -euo pipefail
 
 export PATH="$PATH:$HOME/.lmstudio/bin"
-CTX="${FUGU_CONTEXT:-65536}"
+CTX="${MAGI_CONTEXT:-65536}"
 
 for model in "qwen/qwen3.8-27b" "google/gemma-4-31b" "meta/muse-glimmer"; do
   echo "==> $model (context $CTX, no TTL)"
@@ -18,7 +18,7 @@ for model in "qwen/qwen3.8-27b" "google/gemma-4-31b" "meta/muse-glimmer"; do
 done
 
 # Only needed if the ollama-hosted member is re-enabled in config.json.
-if [ "${FUGU_OLLAMA:-0}" = "1" ] && ! curl -sf --max-time 2 http://localhost:11434/v1/models >/dev/null; then
+if [ "${MAGI_OLLAMA:-0}" = "1" ] && ! curl -sf --max-time 2 http://localhost:11434/v1/models >/dev/null; then
   echo "==> starting ollama"
   nohup ollama serve >/tmp/ollama.log 2>&1 &
   sleep 3

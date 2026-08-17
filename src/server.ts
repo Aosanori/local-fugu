@@ -10,11 +10,11 @@ import { verifyConfig } from './verify.ts'
 
 await probe()
 
-const VIRTUAL_MODELS = ['fugu-auto', 'fugu-moa', 'fugu-fast']
+const VIRTUAL_MODELS = ['magi-auto', 'magi-moa', 'magi-fast']
 
 const log = (parts: Record<string, unknown>) =>
   console.log(
-    '[fugu] ' +
+    '[magi] ' +
       Object.entries(parts)
         .map(([k, v]) => `${k}=${v}`)
         .join(' '),
@@ -36,7 +36,7 @@ async function handleChat(req: Request): Promise<Response> {
   const body = (await req.json()) as ChatRequest
   const virtual = body.model
 
-  if (process.env.FUGU_DUMP) await Bun.write(process.env.FUGU_DUMP, JSON.stringify(body, null, 2))
+  if (process.env.MAGI_DUMP) await Bun.write(process.env.MAGI_DUMP, JSON.stringify(body, null, 2))
   const mode = modeOf(virtual)
   const decision = route(body, mode)
   const started = Date.now()
@@ -114,7 +114,7 @@ async function handleChat(req: Request): Promise<Response> {
       ...rivals.filter((r) => (r.message.tool_calls?.length ?? 0) > 0),
     ]
     const verified = await verifiedSelect(candidates, turn).catch((e) => {
-      console.warn(`[fugu] verify failed: ${(e as Error).message}`)
+      console.warn(`[magi] verify failed: ${(e as Error).message}`)
       return null
     })
     const winner = verified?.winner ?? candidates[0]
@@ -169,7 +169,7 @@ async function handleChat(req: Request): Promise<Response> {
     // so it is tried even when the pool already agrees — a unanimous edit can
     // still be a regression.
     const verified = await verifiedSelect(toolCallers, turn).catch((e) => {
-      console.warn(`[fugu] verify failed: ${(e as Error).message}`)
+      console.warn(`[magi] verify failed: ${(e as Error).message}`)
       return null
     })
 
@@ -386,7 +386,7 @@ const server = Bun.serve({
       return Response.json(
         {
           object: 'list',
-          data: VIRTUAL_MODELS.map((id) => ({ id, object: 'model', owned_by: 'local-fugu' })),
+          data: VIRTUAL_MODELS.map((id) => ({ id, object: 'model', owned_by: 'magi' })),
         },
         { headers: CORS },
       )
@@ -397,8 +397,8 @@ const server = Bun.serve({
         return await handleChat(req)
       } catch (e) {
         const msg = (e as Error).message
-        console.error(`[fugu] error: ${msg}`)
-        return Response.json({ error: { message: msg, type: 'fugu_error' } }, { status: 500 })
+        console.error(`[magi] error: ${msg}`)
+        return Response.json({ error: { message: msg, type: 'magi_error' } }, { status: 500 })
       }
     }
 

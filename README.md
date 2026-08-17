@@ -1,4 +1,4 @@
-# local-fugu
+# magi
 
 A hand-written stand-in for Fugu's orchestrator: one OpenAI-compatible endpoint
 that fans a turn out to a pool of local models, fuses the results, and answers
@@ -10,23 +10,30 @@ Here the routing policy is a hand-written table in `src/router.ts`.
 ## Install
 
 ```bash
-brew install aosanori/tap/local-fugu
+brew install aosanori/tap/magi
 ```
 
-Gives you `local-fugu` (the gateway) and `magi` (the console). The pool config
-lands in `$(brew --prefix)/etc/local-fugu/config.json` and survives upgrades.
+One command with two halves: `magi serve` is the gateway, `magi` on its own
+opens the console. The pool config lands in `$(brew --prefix)/etc/magi/config.json`
+and survives upgrades.
 
 ## Running
 
 ```bash
 ./scripts/load-models.sh   # load the pool (see "Gotchas" — this matters)
-./scripts/serve.sh         # gateway on http://localhost:4141/v1
+./scripts/magi.sh serve    # gateway on http://localhost:4141/v1
 ```
 
-From a Homebrew install, `local-fugu` and `magi` replace the two scripts.
+From a Homebrew install, `magi serve` and `magi` replace the two scripts.
 
 ```bash
 curl -s http://localhost:4141/health
+```
+
+In opencode (`~/.config/opencode/opencode.json` already has the provider):
+
+```bash
+opencode run --model magi/magi-auto "fix the bug in math.dart"
 ```
 
 ## The console
@@ -40,7 +47,7 @@ won, not just which model won.
 In the terminal:
 
 ```bash
-./scripts/magi.sh
+magi
 ```
 
 ```
@@ -126,19 +133,14 @@ or raise `rounds` in `config.json`:
 Tool turns never debate. When a verifier can answer the question, an argument
 between models is a worse instrument than running the tests.
 
-In opencode (`~/.config/opencode/opencode.json` already has the provider):
-
-```bash
-opencode run --model fugu/fugu-auto "fix the bug in math.dart"
-```
 
 ## The three virtual models
 
 | id | behaviour |
 |---|---|
-| `fugu-auto` | routed: fan out on decision turns, single model on the tool loop |
-| `fugu-moa` | always fan out (slow, for hard one-shot questions) |
-| `fugu-fast` | primary model only, no fusion |
+| `magi-auto` | routed: fan out on decision turns, single model on the tool loop |
+| `magi-moa` | always fan out (slow, for hard one-shot questions) |
+| `magi-fast` | primary model only, no fusion |
 
 ## How a turn is handled
 

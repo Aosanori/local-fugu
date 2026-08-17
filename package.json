@@ -1,12 +1,12 @@
 {
-  "name": "local-fugu",
+  "name": "magi",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun run src/server.ts",
-    "dev": "bun --watch src/server.ts",
-    "magi": "bun run scripts/magi.ts",
+    "start": "bun run src/cli.ts serve",
+    "console": "bun run src/cli.ts",
+    "dev": "bun --watch src/cli.ts serve",
     "selftest": "bun run scripts/verify-selftest.ts"
   }
 }

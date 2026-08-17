@@ -99,7 +99,7 @@ export async function scoreWorkspace(
   scorers: Scorer[],
   edit: Edit | null,
 ): Promise<Score> {
-  const sandbox = mkdtempSync(join(tmpdir(), 'fugu-verify-'))
+  const sandbox = mkdtempSync(join(tmpdir(), 'magi-verify-'))
   const clone = join(sandbox, 'ws')
 
   try {

@@ -37,7 +37,7 @@ export type Config = {
   }
 }
 
-export const configPath = process.env.FUGU_CONFIG ?? new URL('../config.json', import.meta.url).pathname
+export const configPath = process.env.MAGI_CONFIG ?? new URL('../config.json', import.meta.url).pathname
 
 export const config: Config = JSON.parse(await Bun.file(configPath).text())
 
@@ -132,7 +132,7 @@ export async function probe(): Promise<void> {
       loaded.set(name, new Set((body.data ?? []).map((d) => d.id)))
     } catch (e) {
       loaded.set(name, new Set())
-      console.warn(`[fugu] upstream ${name} unreachable: ${(e as Error).message}`)
+      console.warn(`[magi] upstream ${name} unreachable: ${(e as Error).message}`)
     }
   }
 

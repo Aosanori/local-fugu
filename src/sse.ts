@@ -1,6 +1,6 @@
 import type { Message } from './upstream.ts'
 
-const id = () => `chatcmpl-fugu-${Math.random().toString(36).slice(2, 12)}`
+const id = () => `chatcmpl-magi-${Math.random().toString(36).slice(2, 12)}`
 
 const chunk = (model: string, cid: string, delta: unknown, finish: string | null) =>
   `data: ${JSON.stringify({

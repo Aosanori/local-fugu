@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Terminal MAGI console. Resolves bun the same way serve.sh does, because the
-# mise shim errors out when no global bun version is set.
+# magi, straight from a checkout. Resolves bun the same way a Homebrew stub
+# would, because the mise shim errors out when no global bun version is set.
 set -euo pipefail
 
 # Follow symlinks back to the checkout, so this works when linked onto PATH
@@ -19,4 +19,4 @@ if [ -z "$BUN" ] || ! "$BUN" --version >/dev/null 2>&1; then
 fi
 [ -x "$BUN" ] || { echo "bun not found"; exit 1; }
 
-exec "$BUN" run scripts/magi.ts
+exec "$BUN" run src/cli.ts "$@"
