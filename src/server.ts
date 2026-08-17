@@ -9,10 +9,12 @@ import {
   debateWorthIt,
   judge,
   propose,
+  type Proposal,
   similarity,
   synthesisRequest,
   turnTimeoutMs,
   verifiedSelect,
+  worthSecondOpinions,
 } from './fuse.ts'
 import { modeOf, route, seatFor } from './router.ts'
 import { jsonFromMessage, sseKeepAlive, type Turn } from './sse.ts'
@@ -70,6 +72,28 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
 
   // The member this conversation is stuck to — cache-warm for every direct call.
   const seat = seatFor(base)
+
+  const dcfg = config.debate
+  const dmode = dcfg?.mode ?? (dcfg?.enabled ? 'always' : 'off')
+
+  /** Rounds of cross-examination until the panel stops revising. */
+  const debateRounds = async (drafts: Proposal[]): Promise<Proposal[]> => {
+    const maxRounds = dcfg?.maxRounds ?? dcfg?.rounds ?? 1
+    const threshold = dcfg?.convergence ?? 0.85
+    let current = drafts
+    for (let round = 1; round <= maxRounds; round++) {
+      const before = new Map(current.map((d) => [d.member.id, d.message.content ?? '']))
+      current = await debate(base, current, { signal: req.signal, turn, round })
+      // The most-changed debater decides: once even they kept their answer,
+      // another round has nothing left to move.
+      const stability = Math.min(
+        ...current.map((d) => similarity(before.get(d.member.id) ?? '', d.message.content ?? '')),
+      )
+      log({ route: decision.kind, debate: `round ${round}`, stability: stability.toFixed(2) })
+      if (stability >= threshold) break
+    }
+    return current
+  }
 
   // propose() reports its own failures per seat; these are for the calls made
   // directly — primary and aggregator — which used to fail invisibly, leaving
@@ -134,6 +158,52 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
     })
 
     if (!isEdit) {
+      // A turn-ending answer with no tool call is where mid-task judgment
+      // lives — the fan-out triage never sees these turns, so the owner
+      // self-triages: is this a conclusion second opinions could change?
+      const text = first.message.content ?? ''
+      const minChars = dcfg?.escalateMinChars ?? 0
+      if (!call && dmode !== 'off' && minChars > 0 && text.length >= minChars) {
+        const verdict = await worthSecondOpinions(base, text, m, req.signal)
+        log({ route: 'speculative', escalate: verdict.escalate ? 'yes' : 'no', why: `"${verdict.why}"` })
+
+        if (verdict.escalate) {
+          const rivals = (await propose(base, { signal: req.signal, exclude: [m.id], turn })).filter(
+            (r) => !r.message.tool_calls?.length && (r.message.content ?? '').trim() !== '',
+          )
+          let drafts: Proposal[] = [
+            { member: m, message: first.message, finish_reason: first.finish_reason, ms: 0, tokens: first.tokens },
+            ...rivals,
+          ]
+
+          if (drafts.length >= 2) {
+            const second =
+              dmode === 'auto'
+                ? await debateWorthIt(base, drafts, m, req.signal)
+                : { debate: true, why: 'mode=always' }
+            log({ route: 'speculative', debate: second.debate ? 'go' : 'skipped', why: `"${second.why}"` })
+
+            if (second.debate) {
+              drafts = await debateRounds(drafts)
+              const synth = synthesisRequest(base, drafts)
+              emit({ type: 'node', turn, id: m.id, state: 'thinking' })
+              const synthesized = await complete(m, synth, {
+                signal: req.signal,
+                timeoutMs: turnTimeoutMs(synth),
+              })
+              announce(turn, [...drafts.map((d) => d.member.id), m.id], m.id, 'contributed')
+              emit({ type: 'decision', turn, mode: 'debate', winner: m.id, ms: Date.now() - started })
+              return { message: synthesized.message, finish: synthesized.finish_reason }
+            }
+
+            // The pool read the answer and had nothing to add — it stands.
+            announce(turn, drafts.map((d) => d.member.id), m.id)
+            emit({ type: 'decision', turn, mode: 'confirmed', winner: m.id, ms: Date.now() - started })
+            return { message: first.message, finish: first.finish_reason }
+          }
+        }
+      }
+
       log({ route: 'speculative', escalated: 'no', model: m.id, call: call?.function.name ?? '-' })
       emit({ type: 'node', turn, id: m.id, state: 'winner' })
       emit({
@@ -248,8 +318,6 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
   // 90-300 s round is worth paying for; rounds then repeat until the panel
   // stops revising or maxRounds is hit.
   let finalDrafts = drafts
-  const dcfg = config.debate
-  const dmode = dcfg?.mode ?? (dcfg?.enabled ? 'always' : 'off')
   if (dmode !== 'off' && drafts.length >= 2) {
     let go = true
     let why = 'mode=always'
@@ -259,22 +327,7 @@ async function runTurn(body: ChatRequest, req: Request, wantsStream: boolean): P
       why = verdict.why
     }
     log({ route: 'fanout', debate: go ? 'go' : 'skipped', why: `"${why}"` })
-
-    if (go) {
-      const maxRounds = dcfg?.maxRounds ?? dcfg?.rounds ?? 1
-      const threshold = dcfg?.convergence ?? 0.85
-      for (let round = 1; round <= maxRounds; round++) {
-        const before = new Map(finalDrafts.map((d) => [d.member.id, d.message.content ?? '']))
-        finalDrafts = await debate(base, finalDrafts, { signal: req.signal, turn, round })
-        // The most-changed debater decides: once even they kept their answer,
-        // another round has nothing left to move.
-        const stability = Math.min(
-          ...finalDrafts.map((d) => similarity(before.get(d.member.id) ?? '', d.message.content ?? '')),
-        )
-        log({ route: 'fanout', debate: `round ${round}`, stability: stability.toFixed(2) })
-        if (stability >= threshold) break
-      }
-    }
+    if (go) finalDrafts = await debateRounds(finalDrafts)
   }
 
   const agg = seat.aggregator

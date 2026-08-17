@@ -139,7 +139,9 @@
   @keyframes pulse { 50% { stroke: var(--orange-bright); } }
 
   .hub {
-    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    /* The visual notch between the three panels sits below the container's
+       midpoint (the top panel is the tallest), so the label is nudged down. */
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, calc(-50% + 14px));
     color: var(--orange); font-size: 22px; font-weight: 800; letter-spacing: .3em;
     pointer-events: none;
   }

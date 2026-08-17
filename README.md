@@ -141,7 +141,27 @@ actual disagreement in front of it, not the shape of the question.
 When it does debate, rounds repeat until the panel stops revising: after each
 round the most-changed debater's bigram similarity to its previous answer is
 compared against `convergence`, and the loop stops early once even they held
-their position. `maxRounds` caps it either way.
+their position. `maxRounds` caps it either way. A debater that burns its whole
+budget thinking and revises to nothing keeps its previous answer — an empty
+"revision" would read as a total rewrite and poison the convergence measure.
+
+**And the debate can restart in the middle of agentic work.** The turn where an
+agent delivers its conclusion after investigating is a tool-loop continuation,
+which the fan-out triage never sees. So on a continuation turn that ends in
+prose of at least `escalateMinChars`, the owner self-triages: is this a
+judgment call second opinions could change? If yes, rivals answer the same
+conversation, the drafts get the normal triage, and a real disagreement debates
+and synthesizes. Observed live, end to end:
+
+```
+route=speculative escalate=yes why="Architecture choice is subjective judgment call"
+route=speculative debate=go    why="Models disagree on Riverpod vs BLoC unification"
+route=speculative debate=round 1 ...
+route=speculative debate=round 2 ...
+```
+
+Short continuations — the read/bash drumbeat of a tool loop — never reach the
+triage, so the running cost is one cheap self-check on turn-ending prose only.
 
 The console draws a bar in the gap between each pair that is actually talking.
 That is not always the whole pool: a proposer that failed, timed out, or
@@ -153,7 +173,10 @@ propose + one debate round on this machine, against ~110 s without, which is
 exactly why the triage exists. Configure in `config.json`:
 
 ```json
-"debate": { "mode": "auto", "maxRounds": 2, "maxPeerChars": 2000, "convergence": 0.85 }
+"debate": {
+  "mode": "auto", "maxRounds": 2, "maxPeerChars": 2000,
+  "convergence": 0.85, "escalateMinChars": 400
+}
 ```
 
 `mode` is `auto` (owner decides), `always`, or `off`.

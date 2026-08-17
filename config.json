@@ -102,6 +102,7 @@
     "mode": "auto",
     "maxRounds": 2,
     "maxPeerChars": 2000,
-    "convergence": 0.85
+    "convergence": 0.85,
+    "escalateMinChars": 400
   }
 }

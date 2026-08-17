@@ -37,6 +37,8 @@ export type Config = {
     maxPeerChars: number
     /** stop early once every debater's revision is at least this similar (0-1) */
     convergence?: number
+    /** on tool-loop turns, self-triage answers at least this long (0 = never) */
+    escalateMinChars?: number
   }
   router: {
     trivialChars: number

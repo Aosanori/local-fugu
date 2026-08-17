@@ -220,6 +220,9 @@ function render() {
   const linked = (a: number, b: number) =>
     !!slots[a] && !!slots[b] && talking.has(slots[a]!.id) && talking.has(slots[b]!.id)
 
+  // One spacer row keeps the label vertically centred in the notch instead of
+  // hugging the top panel's chamfer.
+  out.push('')
   const hub = Array.from({ length: cols }, () => ' ')
   const put = (text: string, at: number) => [...text].forEach((ch, i) => (hub[at + i] = ch))
   put('M A G I', Math.floor((cols - 7) / 2))

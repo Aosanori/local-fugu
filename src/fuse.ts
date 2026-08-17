@@ -226,6 +226,54 @@ export async function debateWorthIt(
   return { debate: false, why: 'triage failed, skipped' }
 }
 
+/**
+ * Self-triage for a continuation turn: the owner just wrote a turn-ending
+ * answer with no tool call, and decides whether it is the kind of conclusion
+ * that independent opinions could realistically change. This is the entrance
+ * through which a debate can restart in the middle of agentic work — the
+ * fan-out triage never sees those turns.
+ */
+export async function worthSecondOpinions(
+  req: ChatRequest,
+  answer: string,
+  owner: PoolMember,
+  signal?: AbortSignal,
+): Promise<{ escalate: boolean; why: string }> {
+  const lastUser = [...req.messages].reverse().find((m) => m.role === 'user')
+
+  try {
+    const { message } = await complete(
+      owner,
+      {
+        model: '',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You review an answer a coding agent is about to give after investigating. Decide if independent second opinions could realistically change the recommendation. Escalate for judgment calls — architecture choices, trade-offs, migration strategies, anything reasonable experts could answer differently. Do not escalate for factual reports, mechanical summaries of what was found or done, status updates, or anything a test could check. Reply with only JSON: {"escalate": true|false, "why": "<ten words max>"}',
+          },
+          {
+            role: 'user',
+            content: `Task:\n${typeof lastUser?.content === 'string' ? lastUser.content.slice(0, 1500) : '(continuation)'}\n\nAnswer about to be given:\n${answer.slice(0, 2500)}`,
+          },
+        ],
+        max_tokens: config.router.reasoningHeadroom + 64,
+        temperature: 0,
+      },
+      { timeoutMs: turnTimeoutMs(req), signal },
+    )
+    const text = String(message.content ?? '')
+    const parsed = /"escalate"\s*:\s*(true|false)/.exec(text)
+    if (parsed) {
+      const why = /"why"\s*:\s*"([^"]{0,120})"/.exec(text)?.[1] ?? ''
+      return { escalate: parsed[1] === 'true', why }
+    }
+  } catch (e) {
+    console.warn(`[magi] self-escalation triage failed: ${(e as Error).message}`)
+  }
+  return { escalate: false, why: 'triage failed, kept own answer' }
+}
+
 /** Character-bigram overlap — language-neutral, works for Japanese as well. */
 const bigrams = (s: string): Set<string> => {
   const t = s.replace(/\s+/g, ' ').trim().toLowerCase()
@@ -291,6 +339,23 @@ export async function debate(
       )
 
       const ms = Date.now() - started
+
+      // A debater that burned its budget thinking and produced nothing has not
+      // revised — treating the empty string as its new position would poison
+      // the convergence measure (similarity 0 reads as a total rewrite) and
+      // hand the synthesizer a blank draft. It keeps its previous answer.
+      if ((message.content ?? '').trim() === '') {
+        emit({
+          type: 'node',
+          turn,
+          id: own.member.id,
+          state: 'answered',
+          ms,
+          note: `round ${round} · kept previous`,
+        })
+        return own
+      }
+
       emit({
         type: 'node',
         turn,
